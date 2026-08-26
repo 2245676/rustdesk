@@ -555,10 +555,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     return BottomAppBar(
       elevation: 10,
       color: MyTheme.accent,
-      child: Row(
-        mainAxisSize: MainAxisSize.max,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: <Widget>[
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
           Row(
               children: <Widget>[
                     IconButton(
@@ -606,6 +607,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                     () => _showGestureHelp = !_showGestureHelp),
                               ),
                             ]) +
+                  _quickNavigationButtons(ffiModel) +
                   (isWeb
                       ? []
                       : <Widget>[
@@ -642,11 +644,34 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                     ? null
                     : () {
                         setState(() => _showBar = !_showBar);
-                      },
+                },
               )),
-        ],
+          ],
+        ),
       ),
     );
+  }
+
+  List<Widget> _quickNavigationButtons(FfiModel ffiModel) {
+    if (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard) return [];
+
+    Widget keyButton(String tooltip, IconData icon, String key) => Tooltip(
+          message: tooltip,
+          child: IconButton(
+            color: Colors.white,
+            icon: Icon(icon),
+            onPressed: () => gFFI.inputModel.inputKey(key),
+          ),
+        );
+
+    return [
+      const SizedBox(width: 4),
+      keyButton('Left', Icons.keyboard_arrow_left, 'VK_LEFT'),
+      keyButton('Up', Icons.keyboard_arrow_up, 'VK_UP'),
+      keyButton('Down', Icons.keyboard_arrow_down, 'VK_DOWN'),
+      keyButton('Right', Icons.keyboard_arrow_right, 'VK_RIGHT'),
+      keyButton('Enter', Icons.keyboard_return, 'VK_ENTER'),
+    ];
   }
 
   bool get showCursorPaint =>
