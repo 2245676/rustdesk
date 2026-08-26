@@ -1,0 +1,34 @@
+name: Sync upstream RustDesk
+
+on:
+  schedule:
+    - cron: '17 3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out custom branch
+        uses: actions/checkout@v4
+        with:
+          ref: custom-nav-controls
+          token: ${{ secrets.CUSTOM_REPO_TOKEN }}
+          submodules: recursive
+
+      - name: Merge upstream master
+        shell: bash
+        run: |
+          git config user.name 'rustdesk-custom-bot'
+          git config user.email 'rustdesk-custom-bot@users.noreply.github.com'
+          git remote add upstream https://github.com/rustdesk/rustdesk.git
+          git fetch upstream master --tags
+          if git merge-base --is-ancestor upstream/master HEAD; then
+            echo 'Already up to date.'
+            exit 0
+          fi
+          git merge --no-edit upstream/master
+          git push origin HEAD:custom-nav-controls

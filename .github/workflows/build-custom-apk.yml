@@ -1,0 +1,18 @@
+name: Build custom RustDesk APK
+
+on:
+  push:
+    branches:
+      - custom-nav-controls
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/flutter-build.yml
+    secrets: inherit
+    with:
+      upload-artifact: true
+      upload-tag: custom-${{ github.run_id }}

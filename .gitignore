@@ -4,6 +4,9 @@
 .idea
 .DS_Store
 .env
+flutter/android/key.properties
+flutter/android/*.jks
+flutter/android/*.keystore
 libsciter-gtk.so
 src/ui/inline.rs
 extractor
