@@ -1,0 +1,369 @@
+import 'dart:convert';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_hbb/models/input_model.dart';
+import 'package:flutter_hbb/models/platform_model.dart';
+
+const _storageKey = 'xn-custom-shortcuts-v1';
+
+enum CustomShortcutType { key, combination, macro, text }
+
+class CustomShortcut {
+  const CustomShortcut({
+    required this.name,
+    required this.value,
+    required this.type,
+    this.icon = 'keyboard',
+  });
+
+  final String name;
+  final String value;
+  final CustomShortcutType type;
+  final String icon;
+
+  Map<String, dynamic> toJson() => {
+        'name': name,
+        'value': value,
+        'type': type.name,
+        'icon': icon,
+      };
+
+  factory CustomShortcut.fromJson(Map<String, dynamic> json) {
+    return CustomShortcut(
+      name: json['name'] as String? ?? '',
+      value: json['value'] as String? ?? '',
+      type: CustomShortcutType.values.firstWhere(
+        (e) => e.name == json['type'],
+        orElse: () => CustomShortcutType.key,
+      ),
+      icon: json['icon'] as String? ?? 'keyboard',
+    );
+  }
+
+  CustomShortcut copyWith(
+          {String? name,
+          String? value,
+          CustomShortcutType? type,
+          String? icon}) =>
+      CustomShortcut(
+        name: name ?? this.name,
+        value: value ?? this.value,
+        type: type ?? this.type,
+        icon: icon ?? this.icon,
+      );
+}
+
+class CustomShortcutStore {
+  static List<CustomShortcut> load() {
+    final raw = bind.mainGetLocalOption(key: _storageKey);
+    if (raw.isEmpty) return [];
+    try {
+      final data = jsonDecode(raw) as List<dynamic>;
+      return data
+          .whereType<Map>()
+          .map((e) => CustomShortcut.fromJson(Map<String, dynamic>.from(e)))
+          .where((e) => e.name.isNotEmpty && e.value.isNotEmpty)
+          .toList();
+    } catch (_) {
+      return [];
+    }
+  }
+
+  static Future<void> save(List<CustomShortcut> shortcuts) {
+    return bind.mainSetLocalOption(
+      key: _storageKey,
+      value: jsonEncode(shortcuts.map((e) => e.toJson()).toList()),
+    );
+  }
+}
+
+IconData customShortcutIcon(String icon) {
+  switch (icon) {
+    case 'copy':
+      return Icons.copy;
+    case 'paste':
+      return Icons.content_paste;
+    case 'save':
+      return Icons.save;
+    case 'search':
+      return Icons.search;
+    case 'terminal':
+      return Icons.terminal;
+    case 'text':
+      return Icons.text_fields;
+    case 'bolt':
+      return Icons.bolt;
+    default:
+      return Icons.keyboard;
+  }
+}
+
+/// Executes saved shortcuts using the same remote keyboard channel as the
+/// built-in mobile toolbar.
+void runCustomShortcut(InputModel input, CustomShortcut shortcut) {
+  if (shortcut.type == CustomShortcutType.text) {
+    bind.sessionInputString(sessionId: input.sessionId, value: shortcut.value);
+    return;
+  }
+  final steps = shortcut.type == CustomShortcutType.macro
+      ? shortcut.value.split(';')
+      : [shortcut.value];
+  for (final step in steps) {
+    _sendKeyCombination(input, step.trim());
+  }
+}
+
+void _sendKeyCombination(InputModel input, String value) {
+  if (value.isEmpty) return;
+  final parts = value
+      .toUpperCase()
+      .split('+')
+      .map((e) => e.trim())
+      .where((e) => e.isNotEmpty)
+      .toList();
+  if (parts.isEmpty) return;
+  final oldCtrl = input.ctrl;
+  final oldAlt = input.alt;
+  final oldShift = input.shift;
+  final oldCommand = input.command;
+  input.ctrl = parts.remove('CTRL') || parts.remove('CONTROL');
+  input.alt = parts.remove('ALT');
+  input.shift = parts.remove('SHIFT');
+  input.command =
+      parts.remove('CMD') || parts.remove('COMMAND') || parts.remove('META');
+  final key = parts.isEmpty ? 'VK_CONTROL' : _keyName(parts.last);
+  input.inputKey(key);
+  input.ctrl = oldCtrl;
+  input.alt = oldAlt;
+  input.shift = oldShift;
+  input.command = oldCommand;
+}
+
+String _keyName(String key) {
+  if (key.startsWith('VK_')) return key;
+  const names = {
+    'ENTER',
+    'RETURN',
+    'ESC',
+    'ESCAPE',
+    'TAB',
+    'SPACE',
+    'BACK',
+    'DELETE',
+    'INSERT',
+    'HOME',
+    'END',
+    'LEFT',
+    'RIGHT',
+    'UP',
+    'DOWN',
+    'PRIOR',
+    'NEXT'
+  };
+  if (names.contains(key) || RegExp(r'^F(?:[1-9]|1[0-2])$').hasMatch(key)) {
+    return key == 'RETURN' ? 'VK_ENTER' : 'VK_$key';
+  }
+  return key.length == 1 ? 'VK_$key' : key;
+}
+
+class CustomShortcutSettingsPage extends StatefulWidget {
+  const CustomShortcutSettingsPage({super.key, required this.shortcuts});
+  final List<CustomShortcut> shortcuts;
+
+  @override
+  State<CustomShortcutSettingsPage> createState() =>
+      _CustomShortcutSettingsPageState();
+}
+
+class _CustomShortcutSettingsPageState
+    extends State<CustomShortcutSettingsPage> {
+  late List<CustomShortcut> _shortcuts;
+
+  @override
+  void initState() {
+    super.initState();
+    _shortcuts = List.of(widget.shortcuts);
+  }
+
+  Future<void> _save() async {
+    await CustomShortcutStore.save(_shortcuts);
+    if (mounted) Navigator.pop(context, _shortcuts);
+  }
+
+  Future<void> _edit([CustomShortcut? current, int? index]) async {
+    final result = await showDialog<CustomShortcut>(
+      context: context,
+      builder: (_) => _ShortcutEditor(shortcut: current),
+    );
+    if (result == null) return;
+    setState(() {
+      if (index == null) {
+        _shortcuts.add(result);
+      } else {
+        _shortcuts[index] = result;
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) => Scaffold(
+        appBar: AppBar(
+          title: const Text('自定义快捷键'),
+          actions: [
+            IconButton(
+                onPressed: _save, icon: const Icon(Icons.check), tooltip: '保存')
+          ],
+        ),
+        floatingActionButton: FloatingActionButton(
+          onPressed: () => _edit(),
+          child: const Icon(Icons.add),
+        ),
+        body: _shortcuts.isEmpty
+            ? const Center(child: Text('尚未添加快捷键'))
+            : ReorderableListView.builder(
+                itemCount: _shortcuts.length,
+                onReorder: (oldIndex, newIndex) => setState(() {
+                  if (newIndex > oldIndex) newIndex--;
+                  final item = _shortcuts.removeAt(oldIndex);
+                  _shortcuts.insert(newIndex, item);
+                }),
+                itemBuilder: (context, index) {
+                  final item = _shortcuts[index];
+                  return ListTile(
+                    key: ValueKey('${item.name}-$index'),
+                    leading: Icon(customShortcutIcon(item.icon)),
+                    title: Text(item.name),
+                    subtitle: Text('${_typeName(item.type)} · ${item.value}'),
+                    onTap: () => _edit(item, index),
+                    trailing: IconButton(
+                      icon: const Icon(Icons.delete_outline),
+                      onPressed: () =>
+                          setState(() => _shortcuts.removeAt(index)),
+                    ),
+                  );
+                },
+              ),
+      );
+}
+
+String _typeName(CustomShortcutType type) {
+  switch (type) {
+    case CustomShortcutType.key:
+      return '单键';
+    case CustomShortcutType.combination:
+      return '组合键';
+    case CustomShortcutType.macro:
+      return '宏组合键';
+    case CustomShortcutType.text:
+      return '文本输入';
+  }
+}
+
+class _ShortcutEditor extends StatefulWidget {
+  const _ShortcutEditor({this.shortcut});
+  final CustomShortcut? shortcut;
+  @override
+  State<_ShortcutEditor> createState() => _ShortcutEditorState();
+}
+
+class _ShortcutEditorState extends State<_ShortcutEditor> {
+  late final TextEditingController _name;
+  late final TextEditingController _value;
+  late CustomShortcutType _type;
+  late String _icon;
+  static const _icons = [
+    'keyboard',
+    'copy',
+    'paste',
+    'save',
+    'search',
+    'terminal',
+    'text',
+    'bolt'
+  ];
+
+  @override
+  void initState() {
+    super.initState();
+    final shortcut = widget.shortcut;
+    _name = TextEditingController(text: shortcut?.name ?? '');
+    _value = TextEditingController(text: shortcut?.value ?? '');
+    _type = shortcut?.type ?? CustomShortcutType.key;
+    _icon = shortcut?.icon ?? 'keyboard';
+  }
+
+  @override
+  void dispose() {
+    _name.dispose();
+    _value.dispose();
+    super.dispose();
+  }
+
+  String get _hint {
+    switch (_type) {
+      case CustomShortcutType.key:
+        return '例如：F5、ENTER、VK_LEFT';
+      case CustomShortcutType.combination:
+        return '例如：CTRL+C、ALT+F4';
+      case CustomShortcutType.macro:
+        return '例如：CTRL+C; ALT+TAB; CTRL+V';
+      case CustomShortcutType.text:
+        return '输入要发送到远端的文本';
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => AlertDialog(
+        title: Text(widget.shortcut == null ? '添加快捷键' : '编辑快捷键'),
+        content: SingleChildScrollView(
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            TextField(
+                controller: _name,
+                decoration: const InputDecoration(labelText: '按钮名称（例如：复制）')),
+            DropdownButtonFormField<CustomShortcutType>(
+              value: _type,
+              decoration: const InputDecoration(labelText: '类型'),
+              items: CustomShortcutType.values
+                  .map((e) =>
+                      DropdownMenuItem(value: e, child: Text(_typeName(e))))
+                  .toList(),
+              onChanged: (value) => setState(() => _type = value!),
+            ),
+            TextField(
+                controller: _value,
+                decoration: InputDecoration(labelText: '内容', hintText: _hint),
+                maxLines: _type == CustomShortcutType.text ? 3 : 1),
+            DropdownButtonFormField<String>(
+              value: _icon,
+              decoration: const InputDecoration(labelText: '图标'),
+              items: _icons
+                  .map((e) => DropdownMenuItem(
+                      value: e,
+                      child: Row(children: [
+                        Icon(customShortcutIcon(e)),
+                        const SizedBox(width: 8),
+                        Text(e)
+                      ])))
+                  .toList(),
+              onChanged: (value) => setState(() => _icon = value!),
+            ),
+          ]),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context), child: const Text('取消')),
+          FilledButton(
+            onPressed: () {
+              final name = _name.text.trim();
+              final value = _value.text.trim();
+              if (name.isEmpty || value.isEmpty) return;
+              Navigator.pop(
+                  context,
+                  CustomShortcut(
+                      name: name, value: value, type: _type, icon: _icon));
+            },
+            child: const Text('确定'),
+          ),
+        ],
+      );
+}
