@@ -1,10 +1,12 @@
 import 'dart:convert';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/models/input_model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
 
-const _storageKey = 'xn-custom-shortcuts-v1';
+const _storageKey = 'xn-custom-shortcuts-v2';
+const _legacyStorageKey = 'xn-custom-shortcuts-v1';
 
 enum CustomShortcutType { key, combination, macro, text }
 
@@ -56,6 +58,16 @@ class CustomShortcut {
 class CustomShortcutStore {
   static List<CustomShortcut> load() {
     final raw = bind.mainGetLocalOption(key: _storageKey);
+    if (raw.isEmpty) {
+      return [
+        ..._defaultShortcuts,
+        ..._decode(bind.mainGetLocalOption(key: _legacyStorageKey))
+      ];
+    }
+    return _decode(raw);
+  }
+
+  static List<CustomShortcut> _decode(String raw) {
     if (raw.isEmpty) return [];
     try {
       final data = jsonDecode(raw) as List<dynamic>;
@@ -77,10 +89,39 @@ class CustomShortcutStore {
   }
 }
 
+const _defaultShortcuts = [
+  CustomShortcut(
+      name: '左', value: 'VK_LEFT', type: CustomShortcutType.key, icon: 'left'),
+  CustomShortcut(
+      name: '上', value: 'VK_UP', type: CustomShortcutType.key, icon: 'up'),
+  CustomShortcut(
+      name: '下', value: 'VK_DOWN', type: CustomShortcutType.key, icon: 'down'),
+  CustomShortcut(
+      name: '右',
+      value: 'VK_RIGHT',
+      type: CustomShortcutType.key,
+      icon: 'right'),
+  CustomShortcut(
+      name: '回车',
+      value: 'VK_ENTER',
+      type: CustomShortcutType.key,
+      icon: 'enter'),
+];
+
 IconData customShortcutIcon(String icon) {
   switch (icon) {
     case 'copy':
       return Icons.copy;
+    case 'left':
+      return Icons.keyboard_arrow_left;
+    case 'up':
+      return Icons.keyboard_arrow_up;
+    case 'down':
+      return Icons.keyboard_arrow_down;
+    case 'right':
+      return Icons.keyboard_arrow_right;
+    case 'enter':
+      return Icons.keyboard_return;
     case 'paste':
       return Icons.content_paste;
     case 'save':
@@ -93,6 +134,30 @@ IconData customShortcutIcon(String icon) {
       return Icons.text_fields;
     case 'bolt':
       return Icons.bolt;
+    case 'cut':
+      return Icons.content_cut;
+    case 'undo':
+      return Icons.undo;
+    case 'redo':
+      return Icons.redo;
+    case 'refresh':
+      return Icons.refresh;
+    case 'home':
+      return Icons.home;
+    case 'back':
+      return Icons.backspace;
+    case 'delete':
+      return Icons.delete;
+    case 'folder':
+      return Icons.folder;
+    case 'settings':
+      return Icons.settings;
+    case 'play':
+      return Icons.play_arrow;
+    case 'pause':
+      return Icons.pause;
+    case 'star':
+      return Icons.star;
     default:
       return Icons.keyboard;
   }
@@ -183,6 +248,13 @@ class _CustomShortcutSettingsPageState
   void initState() {
     super.initState();
     _shortcuts = List.of(widget.shortcuts);
+    if (isAndroid) gFFI.invokeMethod('enable_soft_keyboard', true);
+  }
+
+  @override
+  void dispose() {
+    if (isAndroid) gFFI.invokeMethod('enable_soft_keyboard', false);
+    super.dispose();
   }
 
   Future<void> _save() async {
@@ -273,13 +345,30 @@ class _ShortcutEditorState extends State<_ShortcutEditor> {
   late String _icon;
   static const _icons = [
     'keyboard',
+    'left',
+    'up',
+    'down',
+    'right',
+    'enter',
     'copy',
     'paste',
+    'cut',
+    'undo',
+    'redo',
     'save',
     'search',
     'terminal',
     'text',
-    'bolt'
+    'bolt',
+    'refresh',
+    'home',
+    'back',
+    'delete',
+    'folder',
+    'settings',
+    'play',
+    'pause',
+    'star',
   ];
 
   @override
