@@ -591,27 +591,6 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                     onPressed: openKeyboard),
                                 IconButton(
                                   color: Colors.white,
-                                  icon: const Icon(Icons.tune),
-                                  tooltip: '自定义快捷键',
-                                  onPressed: () async {
-                                    final shortcuts = await Navigator.push<
-                                        List<CustomShortcut>>(
-                                      context,
-                                      MaterialPageRoute(
-                                        builder: (_) =>
-                                            CustomShortcutSettingsPage(
-                                          shortcuts: _customShortcuts,
-                                        ),
-                                      ),
-                                    );
-                                    if (shortcuts != null && mounted) {
-                                      setState(
-                                          () => _customShortcuts = shortcuts);
-                                    }
-                                  },
-                                ),
-                                IconButton(
-                                  color: Colors.white,
                                   icon: const Icon(Icons.build),
                                   onPressed: () => gFFI.dialogManager
                                       .toggleMobileActionsOverlay(ffi: gFFI),
@@ -631,6 +610,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
                                       _showGestureHelp = !_showGestureHelp),
                                 ),
                               ]) +
+                    (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard
+                        ? []
+                        : [_customShortcutSettingsButton()]) +
                     _quickNavigationButtons(ffiModel) +
                     (isWeb
                         ? []
@@ -676,6 +658,25 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       ),
     );
   }
+
+  Widget _customShortcutSettingsButton() => IconButton(
+        color: Colors.white,
+        icon: const Icon(Icons.tune),
+        tooltip: '自定义快捷键',
+        onPressed: () async {
+          final shortcuts = await Navigator.push<List<CustomShortcut>>(
+            context,
+            MaterialPageRoute(
+              builder: (_) => CustomShortcutSettingsPage(
+                shortcuts: _customShortcuts,
+              ),
+            ),
+          );
+          if (shortcuts != null && mounted) {
+            setState(() => _customShortcuts = shortcuts);
+          }
+        },
+      );
 
   List<Widget> _quickNavigationButtons(FfiModel ffiModel) {
     if (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard) return [];
