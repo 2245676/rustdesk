@@ -7,6 +7,10 @@ import 'package:flutter_hbb/models/platform_model.dart';
 
 const _storageKey = 'xn-custom-shortcuts-v2';
 const _legacyStorageKey = 'xn-custom-shortcuts-v1';
+const _showChatKey = 'xn-custom-show-chat';
+const _hideKeyboardToolbarKey = 'xn-custom-hide-keyboard-toolbar';
+const _twoRowsKey = 'xn-custom-shortcuts-two-rows';
+final customShortcutSettingsOpen = ValueNotifier(false);
 
 enum CustomShortcutType { key, combination, macro, text }
 
@@ -16,18 +20,21 @@ class CustomShortcut {
     required this.value,
     required this.type,
     this.icon = 'keyboard',
+    this.visible = true,
   });
 
   final String name;
   final String value;
   final CustomShortcutType type;
   final String icon;
+  final bool visible;
 
   Map<String, dynamic> toJson() => {
         'name': name,
         'value': value,
         'type': type.name,
         'icon': icon,
+        'visible': visible,
       };
 
   factory CustomShortcut.fromJson(Map<String, dynamic> json) {
@@ -39,6 +46,7 @@ class CustomShortcut {
         orElse: () => CustomShortcutType.key,
       ),
       icon: json['icon'] as String? ?? 'keyboard',
+      visible: json['visible'] as bool? ?? true,
     );
   }
 
@@ -46,12 +54,14 @@ class CustomShortcut {
           {String? name,
           String? value,
           CustomShortcutType? type,
-          String? icon}) =>
+          String? icon,
+          bool? visible}) =>
       CustomShortcut(
         name: name ?? this.name,
         value: value ?? this.value,
         type: type ?? this.type,
         icon: icon ?? this.icon,
+        visible: visible ?? this.visible,
       );
 }
 
@@ -87,6 +97,19 @@ class CustomShortcutStore {
       value: jsonEncode(shortcuts.map((e) => e.toJson()).toList()),
     );
   }
+
+  static bool get showChat => bind.mainGetLocalOption(key: _showChatKey) != 'N';
+  static bool get hideKeyboardToolbar =>
+      bind.mainGetLocalOption(key: _hideKeyboardToolbarKey) == 'Y';
+  static bool get twoRows => bind.mainGetLocalOption(key: _twoRowsKey) == 'Y';
+
+  static Future<void> setShowChat(bool value) =>
+      bind.mainSetLocalOption(key: _showChatKey, value: value ? 'Y' : 'N');
+  static Future<void> setHideKeyboardToolbar(bool value) =>
+      bind.mainSetLocalOption(
+          key: _hideKeyboardToolbarKey, value: value ? 'Y' : 'N');
+  static Future<void> setTwoRows(bool value) =>
+      bind.mainSetLocalOption(key: _twoRowsKey, value: value ? 'Y' : 'N');
 }
 
 const _defaultShortcuts = [
@@ -248,13 +271,55 @@ class _CustomShortcutSettingsPageState
   void initState() {
     super.initState();
     _shortcuts = List.of(widget.shortcuts);
+    customShortcutSettingsOpen.value = true;
     if (isAndroid) gFFI.invokeMethod('enable_soft_keyboard', true);
   }
 
   @override
   void dispose() {
     if (isAndroid) gFFI.invokeMethod('enable_soft_keyboard', false);
+    customShortcutSettingsOpen.value = false;
     super.dispose();
+  }
+
+  Future<void> _showToolbarOptions() async {
+    var showChat = CustomShortcutStore.showChat;
+    var hideKeyboardToolbar = CustomShortcutStore.hideKeyboardToolbar;
+    var twoRows = CustomShortcutStore.twoRows;
+    await showDialog<void>(
+      context: context,
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('快捷栏选项'),
+          content: Column(mainAxisSize: MainAxisSize.min, children: [
+            SwitchListTile(
+              title: const Text('显示文字聊天/语音通话'),
+              value: showChat,
+              onChanged: (value) {
+                setDialogState(() => showChat = value);
+                CustomShortcutStore.setShowChat(value);
+              },
+            ),
+            SwitchListTile(
+              title: const Text('键盘弹出时隐藏快捷栏'),
+              value: hideKeyboardToolbar,
+              onChanged: (value) {
+                setDialogState(() => hideKeyboardToolbar = value);
+                CustomShortcutStore.setHideKeyboardToolbar(value);
+              },
+            ),
+            SwitchListTile(
+              title: const Text('双排底部快捷栏'),
+              value: twoRows,
+              onChanged: (value) {
+                setDialogState(() => twoRows = value);
+                CustomShortcutStore.setTwoRows(value);
+              },
+            ),
+          ]),
+        ),
+      ),
+    );
   }
 
   Future<void> _save() async {
@@ -283,6 +348,10 @@ class _CustomShortcutSettingsPageState
           title: const Text('自定义快捷键'),
           actions: [
             IconButton(
+                onPressed: _showToolbarOptions,
+                icon: const Icon(Icons.tune),
+                tooltip: '快捷栏选项'),
+            IconButton(
                 onPressed: _save, icon: const Icon(Icons.check), tooltip: '保存')
           ],
         ),
@@ -307,10 +376,24 @@ class _CustomShortcutSettingsPageState
                     title: Text(item.name),
                     subtitle: Text('${_typeName(item.type)} · ${item.value}'),
                     onTap: () => _edit(item, index),
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete_outline),
-                      onPressed: () =>
-                          setState(() => _shortcuts.removeAt(index)),
+                    trailing: SizedBox(
+                      width: 96,
+                      child: Row(children: [
+                        IconButton(
+                          icon: Icon(item.visible
+                              ? Icons.visibility
+                              : Icons.visibility_off),
+                          tooltip: item.visible ? '隐藏' : '显示',
+                          onPressed: () => setState(() => _shortcuts[index] =
+                              item.copyWith(visible: !item.visible)),
+                        ),
+                        IconButton(
+                          icon: const Icon(Icons.delete_outline),
+                          tooltip: '删除',
+                          onPressed: () =>
+                              setState(() => _shortcuts.removeAt(index)),
+                        ),
+                      ]),
                     ),
                   );
                 },
@@ -343,6 +426,7 @@ class _ShortcutEditorState extends State<_ShortcutEditor> {
   late final TextEditingController _value;
   late CustomShortcutType _type;
   late String _icon;
+  late bool _visible;
   static const _icons = [
     'keyboard',
     'left',
@@ -379,6 +463,7 @@ class _ShortcutEditorState extends State<_ShortcutEditor> {
     _value = TextEditingController(text: shortcut?.value ?? '');
     _type = shortcut?.type ?? CustomShortcutType.key;
     _icon = shortcut?.icon ?? 'keyboard';
+    _visible = shortcut?.visible ?? true;
   }
 
   @override
@@ -436,6 +521,12 @@ class _ShortcutEditorState extends State<_ShortcutEditor> {
                   .toList(),
               onChanged: (value) => setState(() => _icon = value!),
             ),
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text('显示在快捷栏'),
+              value: _visible,
+              onChanged: (value) => setState(() => _visible = value),
+            ),
           ]),
         ),
         actions: [
@@ -449,7 +540,11 @@ class _ShortcutEditorState extends State<_ShortcutEditor> {
               Navigator.pop(
                   context,
                   CustomShortcut(
-                      name: name, value: value, type: _type, icon: _icon));
+                      name: name,
+                      value: value,
+                      type: _type,
+                      icon: _icon,
+                      visible: _visible));
             },
             child: const Text('确定'),
           ),

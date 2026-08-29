@@ -242,6 +242,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       );
 
   void onSoftKeyboardChanged(bool visible) {
+    if (customShortcutSettingsOpen.value) return;
     if (!visible) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
       // [pi.version.isNotEmpty] -> check ready or not, avoid login without soft-keyboard
@@ -438,7 +439,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   Widget _bottomWidget() => _showGestureHelp
       ? getGestureHelp()
-      : (_showBar && gFFI.ffiModel.pi.displays.isNotEmpty
+      : (_showBar &&
+              !((keyboardVisibilityController.isVisible &&
+                  CustomShortcutStore.hideKeyboardToolbar)) &&
+              gFFI.ffiModel.pi.displays.isNotEmpty
           ? getBottomAppBar()
           : Offstage());
 
@@ -558,103 +562,118 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     return BottomAppBar(
       elevation: 10,
       color: MyTheme.accent,
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            Row(
-                children: <Widget>[
-                      IconButton(
-                        color: Colors.white,
-                        icon: Icon(Icons.clear),
-                        onPressed: () {
-                          clientClose(sessionId, gFFI);
-                        },
-                      ),
-                      IconButton(
-                        color: Colors.white,
-                        icon: Icon(Icons.tv),
-                        onPressed: () {
-                          setState(() => _showEdit = false);
-                          showOptions(context, widget.id, gFFI.dialogManager);
-                        },
-                      )
-                    ] +
-                    (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard
-                        ? []
-                        : gFFI.ffiModel.isPeerAndroid
-                            ? [
-                                IconButton(
-                                    color: Colors.white,
-                                    icon: Icon(Icons.keyboard),
-                                    onPressed: openKeyboard),
-                                IconButton(
-                                  color: Colors.white,
-                                  icon: const Icon(Icons.build),
-                                  onPressed: () => gFFI.dialogManager
-                                      .toggleMobileActionsOverlay(ffi: gFFI),
-                                )
-                              ]
-                            : [
-                                IconButton(
-                                    color: Colors.white,
-                                    icon: Icon(Icons.keyboard),
-                                    onPressed: openKeyboard),
-                                IconButton(
-                                  color: Colors.white,
-                                  icon: Icon(gFFI.ffiModel.touchMode
-                                      ? Icons.touch_app
-                                      : Icons.mouse),
-                                  onPressed: () => setState(() =>
-                                      _showGestureHelp = !_showGestureHelp),
-                                ),
-                              ]) +
-                    (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard
-                        ? []
-                        : [_customShortcutSettingsButton()]) +
-                    _quickNavigationButtons(ffiModel) +
-                    (isWeb
-                        ? []
-                        : <Widget>[
-                            futureBuilder(
-                                future: gFFI.invokeMethod(
-                                    "get_value", "KEY_IS_SUPPORT_VOICE_CALL"),
-                                hasData: (isSupportVoiceCall) => IconButton(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                Row(
+                    children: <Widget>[
+                          IconButton(
+                            color: Colors.white,
+                            icon: Icon(Icons.clear),
+                            onPressed: () {
+                              clientClose(sessionId, gFFI);
+                            },
+                          ),
+                          IconButton(
+                            color: Colors.white,
+                            icon: Icon(Icons.tv),
+                            onPressed: () {
+                              setState(() => _showEdit = false);
+                              showOptions(
+                                  context, widget.id, gFFI.dialogManager);
+                            },
+                          )
+                        ] +
+                        (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard
+                            ? []
+                            : gFFI.ffiModel.isPeerAndroid
+                                ? [
+                                    IconButton(
+                                        color: Colors.white,
+                                        icon: Icon(Icons.keyboard),
+                                        onPressed: openKeyboard),
+                                    IconButton(
                                       color: Colors.white,
-                                      icon: isAndroid && isSupportVoiceCall
-                                          ? SvgPicture.asset('assets/chat.svg',
-                                              colorFilter: ColorFilter.mode(
-                                                  Colors.white,
-                                                  BlendMode.srcIn))
-                                          : Icon(Icons.message),
-                                      onPressed: () =>
-                                          isAndroid && isSupportVoiceCall
+                                      icon: const Icon(Icons.build),
+                                      onPressed: () => gFFI.dialogManager
+                                          .toggleMobileActionsOverlay(
+                                              ffi: gFFI),
+                                    )
+                                  ]
+                                : [
+                                    IconButton(
+                                        color: Colors.white,
+                                        icon: Icon(Icons.keyboard),
+                                        onPressed: openKeyboard),
+                                    IconButton(
+                                      color: Colors.white,
+                                      icon: Icon(gFFI.ffiModel.touchMode
+                                          ? Icons.touch_app
+                                          : Icons.mouse),
+                                      onPressed: () => setState(() =>
+                                          _showGestureHelp = !_showGestureHelp),
+                                    ),
+                                  ]) +
+                        (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard
+                            ? []
+                            : [_customShortcutSettingsButton()]) +
+                        (CustomShortcutStore.twoRows
+                            ? []
+                            : _quickNavigationButtons(ffiModel)) +
+                        (!CustomShortcutStore.showChat || isWeb
+                            ? []
+                            : <Widget>[
+                                futureBuilder(
+                                    future: gFFI.invokeMethod("get_value",
+                                        "KEY_IS_SUPPORT_VOICE_CALL"),
+                                    hasData: (isSupportVoiceCall) => IconButton(
+                                          color: Colors.white,
+                                          icon: isAndroid && isSupportVoiceCall
+                                              ? SvgPicture.asset(
+                                                  'assets/chat.svg',
+                                                  colorFilter: ColorFilter.mode(
+                                                      Colors.white,
+                                                      BlendMode.srcIn))
+                                              : Icon(Icons.message),
+                                          onPressed: () => isAndroid &&
+                                                  isSupportVoiceCall
                                               ? showChatOptions(widget.id)
                                               : onPressedTextChat(widget.id),
-                                    ))
-                          ]) +
-                    [
-                      IconButton(
-                        color: Colors.white,
-                        icon: Icon(Icons.more_vert),
-                        onPressed: () {
-                          setState(() => _showEdit = false);
-                          showActions(widget.id);
-                        },
-                      ),
-                    ]),
-            Obx(() => IconButton(
-                  color: Colors.white,
-                  icon: Icon(Icons.expand_more),
-                  onPressed: gFFI.ffiModel.waitForFirstImage.isTrue
-                      ? null
-                      : () {
-                          setState(() => _showBar = !_showBar);
-                        },
-                )),
-          ],
-        ),
+                                        ))
+                              ]) +
+                        [
+                          IconButton(
+                            color: Colors.white,
+                            icon: Icon(Icons.more_vert),
+                            onPressed: () {
+                              setState(() => _showEdit = false);
+                              showActions(widget.id);
+                            },
+                          ),
+                        ]),
+                Obx(() => IconButton(
+                      color: Colors.white,
+                      icon: Icon(Icons.expand_more),
+                      onPressed: gFFI.ffiModel.waitForFirstImage.isTrue
+                          ? null
+                          : () {
+                              setState(() => _showBar = !_showBar);
+                            },
+                    )),
+              ],
+            ),
+          ),
+          if (CustomShortcutStore.twoRows)
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(children: _quickNavigationButtons(ffiModel)),
+            ),
+        ],
       ),
     );
   }
@@ -681,14 +700,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   List<Widget> _quickNavigationButtons(FfiModel ffiModel) {
     if (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard) return [];
 
-    final customButtons = _customShortcuts.map((shortcut) => Tooltip(
-          message: shortcut.name,
-          child: IconButton(
-            color: Colors.white,
-            icon: Icon(customShortcutIcon(shortcut.icon)),
-            onPressed: () => runCustomShortcut(gFFI.inputModel, shortcut),
-          ),
-        ));
+    final customButtons = _customShortcuts
+        .where((shortcut) => shortcut.visible)
+        .map((shortcut) => Tooltip(
+              message: shortcut.name,
+              child: IconButton(
+                color: Colors.white,
+                icon: Icon(customShortcutIcon(shortcut.icon)),
+                onPressed: () => runCustomShortcut(gFFI.inputModel, shortcut),
+              ),
+            ));
 
     return [
       const SizedBox(width: 4),
