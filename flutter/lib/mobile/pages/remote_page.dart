@@ -757,10 +757,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             KeyHelpTools(
                 keyboardIsVisible: keyboardIsVisible,
                 showGestureHelp: _showGestureHelp,
-                // The modifier/task bar must never cover the remote view while
-                // Android's soft keyboard is open. The bottom toolbar has its
-                // own user-controlled setting.
-                visible: !keyboardIsVisible),
+                // The top task bar and bottom toolbar have separate
+                // keyboard-visible settings.
+                visible: !(keyboardIsVisible &&
+                    CustomShortcutStore.hideKeyboardTaskBar)),
             SizedBox(
               width: 0,
               height: 0,

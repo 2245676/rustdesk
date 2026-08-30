@@ -8,6 +8,7 @@ import 'package:flutter_hbb/models/platform_model.dart';
 const _storageKey = 'xn-custom-shortcuts-v2';
 const _legacyStorageKey = 'xn-custom-shortcuts-v1';
 const _showChatKey = 'xn-custom-show-chat';
+const _hideKeyboardTaskBarKey = 'xn-custom-hide-keyboard-task-bar';
 const _hideKeyboardToolbarKey = 'xn-custom-hide-keyboard-toolbar';
 const _twoRowsKey = 'xn-custom-shortcuts-two-rows';
 final customShortcutSettingsOpen = ValueNotifier(false);
@@ -99,12 +100,19 @@ class CustomShortcutStore {
   }
 
   static bool get showChat => bind.mainGetLocalOption(key: _showChatKey) != 'N';
+  // Default to hiding the modifier/task bar while typing, preserving the
+  // safer behavior for existing users until they explicitly opt out.
+  static bool get hideKeyboardTaskBar =>
+      bind.mainGetLocalOption(key: _hideKeyboardTaskBarKey) != 'N';
   static bool get hideKeyboardToolbar =>
       bind.mainGetLocalOption(key: _hideKeyboardToolbarKey) == 'Y';
   static bool get twoRows => bind.mainGetLocalOption(key: _twoRowsKey) == 'Y';
 
   static Future<void> setShowChat(bool value) =>
       bind.mainSetLocalOption(key: _showChatKey, value: value ? 'Y' : 'N');
+  static Future<void> setHideKeyboardTaskBar(bool value) =>
+      bind.mainSetLocalOption(
+          key: _hideKeyboardTaskBarKey, value: value ? 'Y' : 'N');
   static Future<void> setHideKeyboardToolbar(bool value) =>
       bind.mainSetLocalOption(
           key: _hideKeyboardToolbarKey, value: value ? 'Y' : 'N');
@@ -284,6 +292,7 @@ class _CustomShortcutSettingsPageState
 
   Future<void> _showToolbarOptions() async {
     var showChat = CustomShortcutStore.showChat;
+    var hideKeyboardTaskBar = CustomShortcutStore.hideKeyboardTaskBar;
     var hideKeyboardToolbar = CustomShortcutStore.hideKeyboardToolbar;
     var twoRows = CustomShortcutStore.twoRows;
     await showDialog<void>(
@@ -298,6 +307,14 @@ class _CustomShortcutSettingsPageState
               onChanged: (value) {
                 setDialogState(() => showChat = value);
                 CustomShortcutStore.setShowChat(value);
+              },
+            ),
+            SwitchListTile(
+              title: const Text('键盘弹出时关闭上任务栏'),
+              value: hideKeyboardTaskBar,
+              onChanged: (value) {
+                setDialogState(() => hideKeyboardTaskBar = value);
+                CustomShortcutStore.setHideKeyboardTaskBar(value);
               },
             ),
             SwitchListTile(
