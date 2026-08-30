@@ -61,6 +61,7 @@ class RemotePage extends StatefulWidget {
 
 class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Timer? _timer;
+  Timer? _canvasLayoutTimer;
   bool _showBar = !isWebDesktop;
   bool _showGestureHelp = false;
   String _value = '';
@@ -168,6 +169,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     inputModel.keyboardInputAllowed = true;
     await gFFI.close();
     _timer?.cancel();
+    _canvasLayoutTimer?.cancel();
     _iosKeyboardWorkaroundTimer?.cancel();
     gFFI.dialogManager.dismissAll();
     await SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual,
@@ -186,6 +188,22 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     if (state == AppLifecycleState.resumed) {
       trySyncClipboard();
     }
+  }
+
+  @override
+  void didChangeMetrics() {
+    // Android can report the new window bounds one frame after a rotation,
+    // multi-window resize, or system-bar change. Recalculate the remote canvas
+    // after layout settles so adaptive view does not retain the previous width.
+    _scheduleCanvasLayoutRefresh();
+  }
+
+  void _scheduleCanvasLayoutRefresh() {
+    _canvasLayoutTimer?.cancel();
+    _canvasLayoutTimer = Timer(const Duration(milliseconds: 100), () {
+      if (!mounted) return;
+      gFFI.canvasModel.updateViewStyle();
+    });
   }
 
   // For client side
@@ -277,6 +295,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
     // update for Scaffold
     setState(() {});
+    _scheduleCanvasLayoutRefresh();
   }
 
   void _handleIOSSoftKeyboardInput(String newValue) {
@@ -424,6 +443,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     _textController.text = _value;
     setState(() => _showEdit = false);
     _timer?.cancel();
+    _canvasLayoutTimer?.cancel();
     _timer = Timer(kMobileDelaySoftKeyboard, () {
       // show now, and sleep a while to requestFocus to
       // make sure edit ready, so that keyboard won't show/hide/show/hide happen
@@ -736,7 +756,11 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             ),
             KeyHelpTools(
                 keyboardIsVisible: keyboardIsVisible,
-                showGestureHelp: _showGestureHelp),
+                showGestureHelp: _showGestureHelp,
+                // The modifier/task bar must never cover the remote view while
+                // Android's soft keyboard is open. The bottom toolbar has its
+                // own user-controlled setting.
+                visible: !keyboardIsVisible),
             SizedBox(
               width: 0,
               height: 0,
@@ -986,12 +1010,15 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 class KeyHelpTools extends StatefulWidget {
   final bool keyboardIsVisible;
   final bool showGestureHelp;
+  final bool visible;
 
   /// need to show by external request, etc [keyboardIsVisible] or [changeTouchMode]
   bool get requestShow => keyboardIsVisible || showGestureHelp;
 
   KeyHelpTools(
-      {required this.keyboardIsVisible, required this.showGestureHelp});
+      {required this.keyboardIsVisible,
+      required this.showGestureHelp,
+      this.visible = true});
 
   @override
   State<KeyHelpTools> createState() => _KeyHelpToolsState();
@@ -1048,7 +1075,7 @@ class _KeyHelpToolsState extends State<KeyHelpTools> {
         inputModel.shift ||
         inputModel.command;
 
-    if (!_pin && !hasModifierOn && !widget.requestShow) {
+    if (!widget.visible || (!_pin && !hasModifierOn && !widget.requestShow)) {
       gFFI.cursorModel
           .keyHelpToolsVisibilityChanged(null, widget.keyboardIsVisible);
       return Offstage();

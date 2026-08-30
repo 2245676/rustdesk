@@ -301,7 +301,7 @@ class _CustomShortcutSettingsPageState
               },
             ),
             SwitchListTile(
-              title: const Text('键盘弹出时隐藏快捷栏'),
+              title: const Text('键盘弹出时关闭底部快捷栏'),
               value: hideKeyboardToolbar,
               onChanged: (value) {
                 setDialogState(() => hideKeyboardToolbar = value);
