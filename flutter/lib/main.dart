@@ -299,7 +299,10 @@ void runConnectionManagerScreen() async {
   if (hide) {
     await hideCmWindow(isStartup: true);
   } else {
-    await showCmWindow(isStartup: true);
+    // Keep the incoming-session controls available from the taskbar without
+    // interrupting the controlled desktop when a password-authorized session
+    // starts. Unauthorised sessions still use the normal approval flow.
+    await minimizeCmWindow(isStartup: true);
   }
   setResizable(false);
   // Start the uni links handler and redirect links to Native, not for Flutter.
@@ -308,7 +311,7 @@ void runConnectionManagerScreen() async {
 
 bool _isCmReadyToShow = false;
 
-showCmWindow({bool isStartup = false}) async {
+showCmWindow({bool isStartup = false, bool restore = false}) async {
   if (isStartup) {
     WindowOptions windowOptions = getHiddenTitleBarWindowOptions(
         size: kConnectionManagerWindowSizeClosedChat, alwaysOnTop: true);
@@ -331,8 +334,26 @@ showCmWindow({bool isStartup = false}) async {
       await windowManager.setSizeAlignment(
           kConnectionManagerWindowSizeClosedChat, Alignment.topRight);
       windowOnTop(null);
+    } else if (restore && await windowManager.isMinimized()) {
+      await windowManager.restore();
+      await windowManager.focus();
     }
   }
+}
+
+minimizeCmWindow({bool isStartup = false}) async {
+  if (!isStartup) {
+    await windowManager.minimize();
+    return;
+  }
+  final windowOptions = getHiddenTitleBarWindowOptions(
+      size: kConnectionManagerWindowSizeClosedChat, alwaysOnTop: true);
+  await windowManager.waitUntilReadyToShow(windowOptions, null);
+  bind.mainHideDock();
+  await windowManager.setSizeAlignment(
+      kConnectionManagerWindowSizeClosedChat, Alignment.topRight);
+  await windowManager.minimize();
+  _isCmReadyToShow = true;
 }
 
 hideCmWindow({bool isStartup = false}) async {

@@ -394,8 +394,15 @@ class _CustomShortcutSettingsPageState
                     subtitle: Text('${_typeName(item.type)} · ${item.value}'),
                     onTap: () => _edit(item, index),
                     trailing: SizedBox(
-                      width: 96,
+                      width: 136,
                       child: Row(children: [
+                        ReorderableDragStartListener(
+                          index: index,
+                          child: const Tooltip(
+                            message: '按住拖动排序',
+                            child: Icon(Icons.drag_handle),
+                          ),
+                        ),
                         IconButton(
                           icon: Icon(item.visible
                               ? Icons.visibility
