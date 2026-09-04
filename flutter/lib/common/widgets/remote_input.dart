@@ -88,6 +88,10 @@ class RawTouchGestureDetectorRegion extends StatefulWidget {
 class _RawTouchGestureDetectorRegionState
     extends State<RawTouchGestureDetectorRegion> {
   Offset _cacheLongPressPosition = Offset(0, 0);
+  // A finger that is already down while the first remote frame arrives can be
+  // recognized as a long press immediately afterwards.  Do not turn that
+  // connection gesture into a remote right click; re-enable it after release.
+  late bool _waitForInitialPointerRelease;
   // Timestamp of the last long press event.
   int _cacheLongPressPositionTs = 0;
   double _mouseScrollIntegral = 0; // mouse scroll speed controller
@@ -115,6 +119,27 @@ class _RawTouchGestureDetectorRegionState
   InputModel get inputModel => widget.inputModel;
   bool get handleTouch => (isDesktop || isWebDesktop) || ffiModel.touchMode;
   SessionID get sessionId => ffi.sessionId;
+
+  @override
+  void initState() {
+    super.initState();
+    _waitForInitialPointerRelease = ffiModel.waitForFirstImage.value;
+  }
+
+  void _syncInitialPointerGuard() {
+    // This also rearms the guard after a reconnect, when the same gesture
+    // detector instance remains mounted.
+    if (ffiModel.waitForFirstImage.value) {
+      _waitForInitialPointerRelease = true;
+    }
+  }
+
+  void _releaseInitialPointerGuard() {
+    _syncInitialPointerGuard();
+    if (!ffiModel.waitForFirstImage.value) {
+      _waitForInitialPointerRelease = false;
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -172,6 +197,7 @@ class _RawTouchGestureDetectorRegionState
         await inputModel.tapUp(MouseButtons.left);
       }
     }
+    _releaseInitialPointerGuard();
   }
 
   onTap() async {
@@ -257,11 +283,16 @@ class _RawTouchGestureDetectorRegionState
     if (handleTouch) {
       await inputModel.tapUp(MouseButtons.left);
     }
+    _releaseInitialPointerGuard();
   }
 
   // for mobiles
   onLongPress() async {
     if (isNotTouchBasedDevice()) {
+      return;
+    }
+    _syncInitialPointerGuard();
+    if (_waitForInitialPointerRelease) {
       return;
     }
     if (!ffi.ffiModel.isPeerMobile) {
@@ -308,6 +339,10 @@ class _RawTouchGestureDetectorRegionState
   onDoubleFinerTap(TapDownDetails d) async {
     lastDeviceKind = d.kind;
     if (isNotTouchBasedDevice()) {
+      return;
+    }
+    _syncInitialPointerGuard();
+    if (_waitForInitialPointerRelease) {
       return;
     }
 
