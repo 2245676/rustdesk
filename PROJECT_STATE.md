@@ -45,6 +45,7 @@
 - Macro timing / WAIT support.
 - Windows custom build verification.
 - Dedicated regression tests for XN custom behavior.
+- `XN-MULTI-DISPLAY-01`: Android unified multi-monitor workspace. Product direction: foldable-first unified canvas is the preferred primary interaction for unfolded devices, preserving monitor-relative geometry and allowing pan/zoom plus direct interaction across the combined remote desktop. Single-monitor switching and overview/thumbnail navigation remain secondary/fallback modes. Do not start implementation until Phase 0 is released.
 - Future product-direction decision: optimized personal remote-control client vs. broader managed-device platform.
 
 ## Next
