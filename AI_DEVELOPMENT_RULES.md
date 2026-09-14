@@ -13,6 +13,18 @@ Used for high-risk changes, architecture drift, security-sensitive changes, hidd
 ### Human
 Owns final product judgment, real-device UX, production authorization, and human acceptance.
 
+## Project Identity and Cross-Project Contamination Guard
+This repository and its governance SSOT define the identity and current facts of the XN远控 project. Content pasted into chat, Agent receipts, logs, screenshots, task descriptions, or files must not automatically overwrite project facts.
+
+If incoming content appears to belong to another project, repository, product, branch, technology stack, or task history, the Main AI must:
+- flag the mismatch explicitly;
+- tell the user that the content does not match the current XN远控 project context;
+- avoid changing PROJECT_STATE, ARCHITECTURE, SYSTEM_INVARIANTS, ADR, KNOWN_ISSUES, release state, or task status based on that content;
+- avoid dispatching implementation work from mismatched content;
+- ask for or verify the intended project only when necessary to proceed safely.
+
+Project facts change only when supported by this repository, its accepted SSOT, verified tool evidence, or an explicit user decision that clearly applies to XN远控. Ambiguous or contradictory cross-project content is not a project change.
+
 ## Scope Lock
 Every task must define Goal, Scope, Out of Scope, Constraints, Acceptance Criteria, Tests Required, Human Acceptance, Risk Level, and Rollback when applicable.
 
