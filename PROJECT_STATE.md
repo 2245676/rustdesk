@@ -7,17 +7,18 @@
 - Upstream: rustdesk/rustdesk
 - Current upstream baseline in custom branch history: RustDesk 1.4.9 / commit `6c578292e8ebbbec708b76986ba8c4bc7c509747`
 - Current development branch: `custom-nav-controls`
-- Current development commit: `d0d435e41b8da376b0fc4ee503f8129e55508c76`
+- Current branch HEAD: governance initialization commit after `d0d435e41b8da376b0fc4ee503f8129e55508c76`
+- Current business-code baseline: `d0d435e41b8da376b0fc4ee503f8129e55508c76`
 - Default repository branch: `master`
 - Current phase: Phase 0 — Governance & Upstream Recovery
 
 ## Current Status
 - Overall: BLOCKED for new feature development.
-- Android custom build: last verified GitHub Actions run succeeded on 2026-09-03 for commit `d0d435e...`.
+- Android custom build: last verified GitHub Actions run succeeded on 2026-09-03 for business-code commit `d0d435e...`.
 - Windows custom build: NOT VERIFIED in current custom CI path.
 - Upstream sync automation: NOT WORKING as designed; scheduled workflow is not loaded from the default branch.
 - Release traceability: BROKEN; latest custom release tag points to `master` instead of the custom build SHA.
-- Upstream divergence: custom branch is 13 commits ahead of fork `master`, 121 behind fork `master`, and 199 behind current upstream `rustdesk/rustdesk master` as reviewed on 2026-09-14.
+- Upstream divergence at governance review: custom branch business-code baseline was 13 commits ahead of fork `master`, 121 behind fork `master`, and 199 behind current upstream `rustdesk/rustdesk master` on 2026-09-14.
 
 ## Completed
 - Fork established from RustDesk.
@@ -26,9 +27,10 @@
 - Custom mobile shortcut system implemented: key, combination, macro, text, icon, visibility, ordering, toolbar options, and two-row layout.
 - Authorized connection-manager minimization behavior implemented on custom branch.
 - Custom Android signed APK build workflow exists and has produced successful builds.
+- Initial governance SSOT established in repository.
 
 ## In Progress
-- Phase 0 governance initialization.
+- Phase 0 governance initialization closeout.
 - Upstream recovery plan.
 - CI / release traceability remediation.
 
@@ -53,7 +55,7 @@
 5. Add Android + Windows build gates and XN regression coverage.
 
 ## Verification Baseline
-- Android CI build: PASS, GitHub Actions run `33714217274`, 2026-09-03.
+- Android CI build: PASS, GitHub Actions run `33714217274`, 2026-09-03, against `d0d435e...`.
 - Android signing: PASS in the same run.
 - Windows build: NOT RUN / NOT VERIFIED for current custom branch.
 - Dedicated XN regression tests: MISSING.
