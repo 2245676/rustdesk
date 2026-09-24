@@ -280,7 +280,8 @@ ParsedShortcutCombination parseShortcutCombination(String value) {
 
 @visibleForTesting
 String normalizeShortcutKey(String key) {
-  if (key.startsWith('VK_')) return key;
+  final upper = key.toUpperCase();
+  if (upper.startsWith('VK_')) return upper;
   const names = {
     'ENTER',
     'RETURN',
@@ -300,8 +301,12 @@ String normalizeShortcutKey(String key) {
     'PRIOR',
     'NEXT'
   };
-  if (names.contains(key) || RegExp(r'^F(?:[1-9]|1[0-2])$').hasMatch(key)) {
-    return key == 'RETURN' ? 'VK_ENTER' : 'VK_$key';
+  if (names.contains(upper)) {
+    return upper == 'RETURN' ? 'VK_ENTER' : 'VK_$upper';
   }
-  return key.length == 1 ? 'VK_$key' : key;
+  if (RegExp(r'^F(?:[1-9]|1[0-2])$').hasMatch(upper)) {
+    return 'VK_$upper';
+  }
+  if (key.length == 1) return 'VK_$upper';
+  return key;
 }

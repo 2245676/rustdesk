@@ -116,6 +116,13 @@ void main() {
       expect(normalizeShortcutKey('5'), 'VK_5');
     });
 
+    test('normalizes mixed-case input to canonical VK_ form', () {
+      expect(normalizeShortcutKey('enter'), 'VK_ENTER');
+      expect(normalizeShortcutKey('f5'), 'VK_F5');
+      expect(normalizeShortcutKey('vk_left'), 'VK_LEFT');
+      expect(normalizeShortcutKey('FooBar'), 'FooBar');
+    });
+
     test('returns unknown names unchanged', () {
       expect(normalizeShortcutKey('UNKNOWN'), 'UNKNOWN');
       expect(normalizeShortcutKey('FooBar'), 'FooBar');
