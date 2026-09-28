@@ -1,6 +1,5 @@
 import 'dart:convert';
 
-import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/models/input_model.dart';
 import 'package:flutter_hbb/models/platform_model.dart';
@@ -71,8 +70,8 @@ class CustomShortcutStore {
     if (raw.isEmpty) {
       return [
         ...defaultCustomShortcuts,
-        ...decode(bind.mainGetLocalOption(
-            key: customShortcutsLegacyStorageKey)),
+        ...decode(
+            bind.mainGetLocalOption(key: customShortcutsLegacyStorageKey)),
       ];
     }
     return decode(raw);
@@ -110,8 +109,7 @@ class CustomShortcutStore {
       bind.mainGetLocalOption(key: twoRowsPrefKey) == 'Y';
 
   static Future<void> setShowChat(bool value) =>
-      bind.mainSetLocalOption(
-          key: showChatPrefKey, value: value ? 'Y' : 'N');
+      bind.mainSetLocalOption(key: showChatPrefKey, value: value ? 'Y' : 'N');
   static Future<void> setHideKeyboardTaskBar(bool value) =>
       bind.mainSetLocalOption(
           key: hideKeyboardTaskBarPrefKey, value: value ? 'Y' : 'N');
@@ -128,10 +126,7 @@ const defaultCustomShortcuts = [
   CustomShortcut(
       name: '上', value: 'VK_UP', type: CustomShortcutType.key, icon: 'up'),
   CustomShortcut(
-      name: '下',
-      value: 'VK_DOWN',
-      type: CustomShortcutType.key,
-      icon: 'down'),
+      name: '下', value: 'VK_DOWN', type: CustomShortcutType.key, icon: 'down'),
   CustomShortcut(
       name: '右',
       value: 'VK_RIGHT',
@@ -271,11 +266,7 @@ ParsedShortcutCombination parseShortcutCombination(String value) {
       parts.remove('CMD') || parts.remove('COMMAND') || parts.remove('META');
   final key = parts.isEmpty ? 'VK_CONTROL' : normalizeShortcutKey(parts.last);
   return ParsedShortcutCombination(
-      ctrl: ctrl,
-      alt: alt,
-      shift: shift,
-      command: command,
-      key: key);
+      ctrl: ctrl, alt: alt, shift: shift, command: command, key: key);
 }
 
 @visibleForTesting
@@ -310,3 +301,8 @@ String normalizeShortcutKey(String key) {
   if (key.length == 1) return 'VK_$upper';
   return key;
 }
+
+/// While the custom shortcut settings page is on top of the remote page,
+/// remote-page soft-keyboard side effects must not steal focus from the
+/// editor's text field.
+final ValueNotifier<bool> customShortcutSettingsOpen = ValueNotifier(false);
