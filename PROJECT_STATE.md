@@ -22,7 +22,8 @@
 - C1 Android brand/package identity implementation PASS.
 - C1 canonical Android build gate PASS.
 - C1 Human Acceptance remains PENDING and may be completed during P0-01F final regression/acceptance.
-- Next step: P0-01C-C2 — migrate the mobile shortcut/action system using a controlled reimplementation.
+- C2A mobile custom shortcut core reimplementation PASS (including FIX-01 key normalization correction).
+- Next step: P0-01C-C2B — integrate the custom shortcut system into the mobile RemotePage UI with thin hooks.
 
 ## Completed
 - Fork established from RustDesk.
@@ -37,7 +38,7 @@
 ## In Progress
 - Phase 0 controlled re-application of XN customizations.
 - C1 Human Acceptance: PENDING.
-- C2 mobile shortcut/action system: pending implementation.
+- C2 mobile shortcut/action system: IN PROGRESS — C2A core PASS; C2B UI integration pending.
 - C3 authorized connection-manager behavior: pending redesign / security review.
 
 ## Blocked
@@ -57,11 +58,12 @@
 - Future product-direction decision: optimized personal remote-control client vs. broader managed-device platform.
 
 ## Next
-1. P0-01C-C2 — controlled migration of the mobile shortcut/action system.
-2. P0-01C-C3 — redesign and migrate authorized connection-manager behavior with security review.
-3. P0-01D — repair upstream-sync automation.
-4. P0-01E — repair exact-SHA release traceability.
-5. P0-01F — Android + Windows regression, install verification, and Human Acceptance.
+1. P0-01C-C2B — integrate the C2A shortcut core into the mobile RemotePage UI with thin hooks.
+2. P0-01C-C2C — canonical Android CI + C2 behavior verification.
+3. P0-01C-C3 — redesign and migrate authorized connection-manager behavior with security review.
+4. P0-01D — repair upstream-sync automation.
+5. P0-01E — repair exact-SHA release traceability.
+6. P0-01F — Android + Windows regression, install verification, and Human Acceptance.
 
 ## Verification Baseline
 - xn-main upstream baseline: SHA `39d4f1854b6fc0ebf6df2477598b970e6d1f73bf`
@@ -80,6 +82,16 @@
   - Android arm64
   - Android armv7
   - Android x86_64
+
+## P0-01C-C2A Verification Evidence
+- C2A core commit: `f3a227e7ac006f8b6403b76522db96b0e8e2b42f`
+- C2A FIX-01 commit: `fafba46d0977678b9610c6a0b2ada5eb62bbbf78`
+- Scope: new `custom_shortcuts.dart` core + focused test file only; no RemotePage/runtime integration yet.
+- Preserved legacy shortcut types, six persistence keys, v1 fallback, five default shortcuts, visibility/icon metadata, text input, key/combination execution, and immediate `;`-split macro semantics.
+- Macro WAIT/delay/ACK remains intentionally NOT implemented; timing risk remains backlog/known issue.
+- FIX-01 corrected key normalization so lowercase canonical inputs normalize to `VK_*` while unknown multi-character keys preserve their original value.
+- Focused test source contains 29 `test(...)` cases at accepted HEAD; local execution remains environment-limited by the non-canonical local Flutter/toolchain and missing generated bridge artifacts.
+- C2A runtime regression surface: NONE until C2B wires the module into `remote_page.dart`.
 
 ## P0-01C-C1 Verification Evidence
 - C1 implementation commit: `f30fa4683ad67414e4f1ae3c87b121a7c8aba809`
