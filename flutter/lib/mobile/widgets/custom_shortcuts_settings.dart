@@ -121,7 +121,10 @@ class _CustomShortcutSettingsPageState
             ? const Center(child: Text('尚未添加快捷键'))
             : ReorderableListView.builder(
                 itemCount: _shortcuts.length,
-                onReorderItem: (oldIndex, newIndex) => setState(() {
+                onReorder: (oldIndex, newIndex) => setState(() {
+                  if (newIndex > oldIndex) {
+                    newIndex--;
+                  }
                   final item = _shortcuts.removeAt(oldIndex);
                   _shortcuts.insert(newIndex, item);
                 }),
@@ -259,7 +262,7 @@ class _ShortcutEditorState extends State<_ShortcutEditor> {
                 controller: _name,
                 decoration: const InputDecoration(labelText: '按钮名称（例如：复制）')),
             DropdownButtonFormField<CustomShortcutType>(
-              initialValue: _type,
+              value: _type,
               decoration: const InputDecoration(labelText: '类型'),
               items: CustomShortcutType.values
                   .map((e) =>
@@ -272,7 +275,7 @@ class _ShortcutEditorState extends State<_ShortcutEditor> {
                 decoration: InputDecoration(labelText: '内容', hintText: _hint),
                 maxLines: _type == CustomShortcutType.text ? 3 : 1),
             DropdownButtonFormField<String>(
-              initialValue: _icon,
+              value: _icon,
               decoration: const InputDecoration(labelText: '图标'),
               items: _icons
                   .map((e) => DropdownMenuItem(
