@@ -170,7 +170,13 @@ class ServerModel with ChangeNotifier {
             }
           } else {
             _zeroClientLengthCounter = 0;
-            if (!hideCm) showCmWindow();
+            if (!hideCm) {
+              if (_clients.any((client) => !client.authorized)) {
+                restoreCmWindow();
+              } else {
+                showCmWindow();
+              }
+            }
           }
         }
       }
@@ -513,7 +519,11 @@ class ServerModel with ChangeNotifier {
       if (_clients.isEmpty) {
         hideCmWindow();
       } else if (!hideCm) {
-        showCmWindow();
+        if (_clients.any((client) => !client.authorized)) {
+          restoreCmWindow();
+        } else {
+          showCmWindow();
+        }
       }
     }
     if (_clients.length != oldClientLenght) {
@@ -557,7 +567,15 @@ class ServerModel with ChangeNotifier {
         tabController.remove(index_disconnected);
       }
       if (desktopType == DesktopType.cm && !hideCm) {
-        showCmWindow();
+        if (!client.authorized) {
+          cmHiddenTimer?.cancel();
+          cmHiddenTimer = null;
+          restoreCmWindow();
+        } else if (_clients.any((c) => !c.authorized)) {
+          restoreCmWindow();
+        } else {
+          showCmWindow();
+        }
       }
       scrollToBottom();
       notifyListeners();
@@ -580,8 +598,11 @@ class ServerModel with ChangeNotifier {
     });
     // Only do the hidden task when on Desktop.
     if (client.authorized && isDesktop) {
+      cmHiddenTimer?.cancel();
       cmHiddenTimer = Timer(const Duration(seconds: 3), () {
-        if (!hideCm) windowManager.minimize();
+        if (!hideCm && !_clients.any((c) => !c.authorized)) {
+          windowManager.minimize();
+        }
         cmHiddenTimer = null;
       });
     }
