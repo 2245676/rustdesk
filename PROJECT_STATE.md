@@ -24,7 +24,9 @@
 - C1 Human Acceptance remains PENDING and may be completed during P0-01F final regression/acceptance.
 - C2A mobile custom shortcut core reimplementation PASS (including FIX-01 key normalization correction).
 - C2B mobile custom shortcut UI integration PASS after independent review (0 findings / 0 blocking findings).
-- Next step: P0-01C-C2C — canonical Android CI + C2 behavior verification.
+- C2C canonical CI / behavior gate PASS. Full Flutter CI Run `36450368096` completed SUCCESS; default bridge and Android arm64/armv7/x86_64 all PASS.
+- C2 Human Acceptance remains PENDING and is deferred to P0-01F real-device regression/acceptance.
+- Next step: P0-01C-C3 — redesign and migrate authorized connection-manager behavior with security review.
 
 ## Completed
 - Fork established from RustDesk.
@@ -39,7 +41,7 @@
 ## In Progress
 - Phase 0 controlled re-application of XN customizations.
 - C1 Human Acceptance: PENDING.
-- C2 mobile shortcut/action system: IN PROGRESS — C2A core PASS; C2B UI integration PASS; C2C canonical CI/behavior verification pending.
+- C2 mobile shortcut/action system: implementation/review/CI PASS — C2A PASS; C2B PASS; C2C PASS. Human Acceptance remains PENDING for P0-01F.
 - C3 authorized connection-manager behavior: pending redesign / security review.
 
 ## Blocked
@@ -59,11 +61,10 @@
 - Future product-direction decision: optimized personal remote-control client vs. broader managed-device platform.
 
 ## Next
-1. P0-01C-C2C — canonical Android CI + C2 behavior verification.
-2. P0-01C-C3 — redesign and migrate authorized connection-manager behavior with security review.
-3. P0-01D — repair upstream-sync automation.
-4. P0-01E — repair exact-SHA release traceability.
-5. P0-01F — Android + Windows regression, install verification, and Human Acceptance.
+1. P0-01C-C3 — redesign and migrate authorized connection-manager behavior with security review.
+2. P0-01D — repair upstream-sync automation.
+3. P0-01E — repair exact-SHA release traceability.
+4. P0-01F — Android + Windows regression, install verification, and Human Acceptance.
 
 ## Verification Baseline
 - xn-main upstream baseline: SHA `39d4f1854b6fc0ebf6df2477598b970e6d1f73bf`
@@ -82,6 +83,16 @@
   - Android arm64
   - Android armv7
   - Android x86_64
+
+## P0-01C-C2C Verification Evidence
+- Full Flutter CI Run `36450368096` — event `pull_request` — conclusion SUCCESS.
+- Temporary validation head: `8085fd2446f02ecdf90d3234d1e155a3191e5f6b` on `ci/c2-gate-validation`; the only validation-only change was caller `permissions: contents: write` required by the reusable workflow. It is not product history and must not be merged into `xn-main`.
+- Required default bridge job (Flutter 3.22.3 / `bridge-artifact`) — PASS.
+- Android `aarch64-linux-android` — PASS.
+- Android `armv7-linux-androideabi` — PASS.
+- Android `x86_64-linux-android` — PASS.
+- Full workflow also completed Windows x64/ARM64, Linux, macOS and SBOM jobs successfully where enabled; configured web/iOS/universal APK/appimage/flatpak/publish jobs were skipped normally.
+- C2 automated/canonical gate is PASS. Human Acceptance is not claimed here and remains PENDING for P0-01F.
 
 ## P0-01C-C2B Verification Evidence
 - C2B implementation commits: `fe4ef49b5326fa7db5e7d7887e34b4c5ebc3a7f8`, `4f8ab9c6dcf0633144564c56f4918c0312bcde4a`, `4b78f5808ab832dfa207ccc616c6246a5af06146`.
