@@ -1,0 +1,85 @@
+name: XN Exact-SHA Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xn-release-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  prepare-release:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+      actions: read
+    outputs:
+      source_sha: ${{ steps.prepare.outputs.source_sha }}
+      release_tag: ${{ steps.prepare.outputs.release_tag }}
+      tag_created: ${{ steps.prepare.outputs.tag_created }}
+      tag_verified: ${{ steps.prepare.outputs.tag_verified }}
+    steps:
+      - name: Reject unsupported context before checkout
+        shell: bash
+        run: |
+          test "$GITHUB_REPOSITORY" = '2245676/rustdesk' || { echo WRONG_REPOSITORY; exit 1; }
+          test "$GITHUB_EVENT_NAME" = 'workflow_dispatch' || { echo WRONG_EVENT; exit 1; }
+          test "$GITHUB_REF" = 'refs/heads/xn-main' || { echo WRONG_SOURCE_REF; exit 1; }
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Prepare and verify exact source tag
+        id: prepare
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/xn/release_traceability.py prepare
+      - name: Preserve preparation evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: xn-release-preparation-${{ github.run_id }}-${{ github.run_attempt }}
+          path: XN_RELEASE_PREPARATION.json
+          if-no-files-found: warn
+
+  build:
+    needs: prepare-release
+    if: ${{ needs.prepare-release.result == 'success' && needs.prepare-release.outputs.tag_verified == 'true' }}
+    permissions:
+      contents: write
+    uses: ./.github/workflows/flutter-build.yml
+    secrets: inherit
+    with:
+      upload-artifact: true
+      upload-tag: ${{ needs.prepare-release.outputs.release_tag }}
+
+  verify-release:
+    needs: [prepare-release, build]
+    if: ${{ always() && needs.prepare-release.result == 'success' }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Verify release, tag, build source and manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BUILD_RESULT: ${{ needs.build.result }}
+          TAG_CREATED: ${{ needs.prepare-release.outputs.tag_created }}
+        run: python3 scripts/xn/release_traceability.py verify
+      - name: Preserve traceability or failure evidence
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: xn-release-traceability-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            XN_RELEASE_TRACEABILITY.json
+            XN_RELEASE_FAILURE.json
+          if-no-files-found: error
