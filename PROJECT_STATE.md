@@ -7,7 +7,7 @@
 - Upstream: rustdesk/rustdesk
 - Current upstream baseline: `39d4f1854b6fc0ebf6df2477598b970e6d1f73bf`
 - Current development branch: `xn-main`
-- XN product features migrated to xn-main: PARTIAL — C1 Android brand/package identity migrated; C2/C3 pending
+- XN product features migrated to xn-main: C1/C2/C3 automated migration gates PASS; Human Acceptance remains pending for P0-01F
 - Legacy custom branch: `custom-nav-controls`
 - Safe restore branch: `restore/xn-remote-20260914-1909`
 - Default repository branch: `master`
@@ -27,7 +27,9 @@
 - C2C canonical CI / behavior gate PASS. Full Flutter CI Run `36450368096` completed SUCCESS; default bridge and Android arm64/armv7/x86_64 all PASS.
 - C2 Human Acceptance remains PENDING and is deferred to P0-01F real-device regression/acceptance.
 - C3A authorized Connection Manager behavior implementation and final independent security review PASS (0 findings / 0 blocking findings).
-- Next step: C3 canonical Windows CI gate.
+- C3 canonical Full Flutter CI Run `36728627973` completed SUCCESS; Windows x64/ARM64/i686 and canonical Flutter 3.22.3 bridge PASS.
+- P0-01D preparation implementation and independent source/security review PASS on commit `4279287aa977556159626f09e8fe9c048946d1c6`; deployed by fast-forward to default branch `master` for activation testing.
+- P0-01D live workflow_dispatch/apply/schedule verification remains PENDING.
 
 ## Completed
 - Fork established from RustDesk.
@@ -43,12 +45,12 @@
 - Phase 0 controlled re-application of XN customizations.
 - C1 Human Acceptance: PENDING.
 - C2 mobile shortcut/action system: implementation/review/CI PASS — C2A PASS; C2B PASS; C2C PASS. Human Acceptance remains PENDING for P0-01F.
-- C3 authorized connection-manager behavior: IN PROGRESS — C3A implementation/security review PASS; canonical Windows CI pending.
+- C3 authorized connection-manager behavior: automated implementation/security/canonical Windows CI gates PASS; Human Acceptance remains PENDING for P0-01F.
+- P0-01D upstream-sync automation: implementation/review/deployment PASS; live dispatch/apply/schedule verification PENDING.
 
 ## Blocked
 - New feature development is STILL BLOCKED until Phase 0 recovery gates pass.
 - Android advanced automation-coexistence work remains blocked until Phase 0 is released.
-- C3 cannot be migrated as a direct legacy replay; it requires redesign and security review.
 
 ## Known Defects
 - See `KNOWN_ISSUES.md`.
@@ -62,10 +64,9 @@
 - Future product-direction decision: optimized personal remote-control client vs. broader managed-device platform.
 
 ## Next
-1. P0-01C-C3 — canonical Windows CI gate for authorized Connection Manager behavior.
-2. P0-01D — repair upstream-sync automation.
-3. P0-01E — repair exact-SHA release traceability.
-4. P0-01F — Android + Windows regression, install verification, and Human Acceptance.
+1. P0-01D — live workflow_dispatch plan/apply and real schedule verification for upstream tracking automation.
+2. P0-01E — repair exact-SHA release traceability.
+3. P0-01F — Android + Windows regression, install verification, and Human Acceptance.
 
 ## Verification Baseline
 - xn-main upstream baseline: SHA `39d4f1854b6fc0ebf6df2477598b970e6d1f73bf`
@@ -97,6 +98,7 @@
 - `hideCm=true` semantics preserved; 500 ms / approximately 6-second zero-client close behavior preserved.
 - Final independent Security Reviewer decision: PASS; findings 0; blocking findings 0; prior startup race F-01 CLOSED.
 - Human window-behavior acceptance is not claimed here and remains for P0-01F.
+- Canonical Full Flutter CI Run `36728627973` completed SUCCESS; Windows x64, Windows ARM64, i686 and default Flutter 3.22.3 bridge all PASS.
 
 ## P0-01C-C2C Verification Evidence
 - Full Flutter CI Run `36450368096` — event `pull_request` — conclusion SUCCESS.
@@ -156,3 +158,11 @@
 - Do NOT claim production ready.
 - Controlled Phase 0 migration is in progress; do not start unrelated new product features.
 - Custom GitHub prereleases exist; they are not considered production releases.
+
+## P0-01D Preparation / Deployment Evidence
+- Reviewed preparation commit: `4279287aa977556159626f09e8fe9c048946d1c6` from base `3f207e91f6061b637f704f94074ee487b030625f`.
+- Scope: four added files only — `.github/workflows/sync-upstream.yml`, `scripts/xn/sync_upstream.py`, `tests/xn/test_sync_upstream.py`, `docs/operations/upstream-sync.md`.
+- Isolated tests: 19/19 PASS; independent source/security review PASS with 0 findings / 0 blocking findings.
+- ACT-01 deployed the exact reviewed commit to default branch `master` by fast-forward; no new deployment commit was created.
+- Workflow registered ACTIVE. No real workflow_dispatch/apply/schedule has yet been accepted as verified.
+- Existing Full Flutter CI push run `36737578394` hit the pre-existing reusable-workflow caller permission startup failure; this is not introduced by P0-01D. Existing CI push run `36737576992` was normally triggered because the deployment added non-ignored `scripts/**` and `tests/**` paths.
