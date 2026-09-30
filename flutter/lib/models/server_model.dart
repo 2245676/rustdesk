@@ -32,6 +32,7 @@ class ServerModel with ChangeNotifier {
   bool _clipboardOk = false;
   bool _showElevation = false;
   bool hideCm = false;
+  bool _cmWindowPolicyReady = false;
   int _connectStatus = 0; // Rendezvous Server status
   String _verificationMethod = "";
   String _temporaryPasswordLength = "";
@@ -163,25 +164,14 @@ class ServerModel with ChangeNotifier {
           updateClientState(res);
         } else {
           if (_clients.isEmpty) {
-            if (hideCm) {
-              hideCmWindow();
-            } else {
-              minimizeCmWindow();
-            }
             if (_zeroClientLengthCounter++ == 12) {
               // 6 second
               windowManager.close();
             }
           } else {
             _zeroClientLengthCounter = 0;
-            if (!hideCm) {
-              if (_clients.any((client) => !client.authorized)) {
-                restoreCmWindow();
-              } else {
-                showCmWindow();
-              }
-            }
           }
+          await _applyCmWindowPolicy();
         }
       }
 
@@ -202,6 +192,33 @@ class ServerModel with ChangeNotifier {
     // Initial keyboard status is off on mobile
     if (isMobile) {
       bind.mainSetOption(key: kOptionEnableKeyboard, value: 'N');
+    }
+  }
+
+  Future<void> onCmWindowInitialized() async {
+    if (desktopType != DesktopType.cm) return;
+    _cmWindowPolicyReady = true;
+    await _applyCmWindowPolicy();
+  }
+
+  Future<void> _applyCmWindowPolicy() async {
+    if (desktopType != DesktopType.cm || !_cmWindowPolicyReady) return;
+
+    if (_clients.isEmpty) {
+      if (hideCm) {
+        await hideCmWindow();
+      } else {
+        await minimizeCmWindow();
+      }
+      return;
+    }
+
+    if (hideCm) return;
+
+    if (_clients.any((client) => !client.authorized)) {
+      await restoreCmWindow();
+    } else {
+      await showCmWindow();
     }
   }
 
@@ -519,21 +536,7 @@ class ServerModel with ChangeNotifier {
         debugPrint("Failed to decode clientJson '$clientJson', error $e");
       }
     }
-    if (desktopType == DesktopType.cm) {
-      if (_clients.isEmpty) {
-        if (hideCm) {
-          hideCmWindow();
-        } else {
-          minimizeCmWindow();
-        }
-      } else if (!hideCm) {
-        if (_clients.any((client) => !client.authorized)) {
-          restoreCmWindow();
-        } else {
-          showCmWindow();
-        }
-      }
-    }
+    await _applyCmWindowPolicy();
     if (_clients.length != oldClientLenght) {
       notifyListeners();
       if (isAndroid) androidUpdatekeepScreenOn();
@@ -574,17 +577,11 @@ class ServerModel with ChangeNotifier {
         _clients.removeAt(index_disconnected);
         tabController.remove(index_disconnected);
       }
-      if (desktopType == DesktopType.cm && !hideCm) {
-        if (!client.authorized) {
-          cmHiddenTimer?.cancel();
-          cmHiddenTimer = null;
-          restoreCmWindow();
-        } else if (_clients.any((c) => !c.authorized)) {
-          restoreCmWindow();
-        } else {
-          showCmWindow();
-        }
+      if (desktopType == DesktopType.cm && !hideCm && !client.authorized) {
+        cmHiddenTimer?.cancel();
+        cmHiddenTimer = null;
       }
+      unawaited(_applyCmWindowPolicy());
       scrollToBottom();
       notifyListeners();
       if (isAndroid && !client.authorized) showLoginDialog(client);
@@ -602,15 +599,17 @@ class ServerModel with ChangeNotifier {
         onTap: () {},
         page: desktop.buildConnectionCard(client)));
     Future.delayed(Duration.zero, () async {
-      if (!hideCm && !client.authorized) {
+      if (_cmWindowPolicyReady && !hideCm && !client.authorized) {
         windowOnTop(null);
       }
     });
     // Only do the hidden task when on Desktop.
-    if (client.authorized && isDesktop) {
+    if (client.authorized && isDesktop && _cmWindowPolicyReady) {
       cmHiddenTimer?.cancel();
       cmHiddenTimer = Timer(const Duration(seconds: 3), () {
-        if (!hideCm && !_clients.any((c) => !c.authorized)) {
+        if (!hideCm &&
+            _cmWindowPolicyReady &&
+            !_clients.any((c) => !c.authorized)) {
           windowManager.minimize();
         }
         cmHiddenTimer = null;
@@ -742,11 +741,7 @@ class ServerModel with ChangeNotifier {
         parent.target?.invokeMethod("cancel_notification", id);
       }
       if (desktopType == DesktopType.cm && _clients.isEmpty) {
-        if (hideCm) {
-          hideCmWindow();
-        } else {
-          minimizeCmWindow();
-        }
+        unawaited(_applyCmWindowPolicy());
       }
       if (isAndroid) androidUpdatekeepScreenOn();
       notifyListeners();

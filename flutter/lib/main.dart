@@ -296,6 +296,7 @@ void runConnectionManagerScreen() async {
   } else {
     await minimizeCmWindow(isStartup: true);
   }
+  await gFFI.serverModel.onCmWindowInitialized();
   setResizable(false);
   // Start the uni links handler and redirect links to Native, not for Flutter.
   listenUniLinks(handleByFlutter: false);
