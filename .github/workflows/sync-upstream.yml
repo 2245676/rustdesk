@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: Observe a candidate or advance upstream-tracking
+        description: Observe a candidate or update upstream metadata
         type: choice
         options:
           - plan
@@ -70,7 +70,7 @@ jobs:
           persist-credentials: false
           submodules: false
           fetch-depth: 1
-      - name: Advance only the official tracking ref
+      - name: Update only the metadata tracking ref
         env:
           XN_WORKFLOW_SHA: ${{ github.workflow_sha }}
           XN_GITHUB_TOKEN: ${{ github.token }}

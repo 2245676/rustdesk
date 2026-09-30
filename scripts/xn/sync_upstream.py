@@ -1,4 +1,4 @@
-"""Observe an official upstream candidate; optionally fast-forward one fixed ref."""
+"""Observe an official candidate; optionally advance a metadata-only tracking ref."""
 
 from __future__ import annotations
 
@@ -22,6 +22,12 @@ TARGET_URL = "https://github.com/2245676/rustdesk.git"
 TARGET_REF = "refs/heads/upstream-tracking"
 SCHEDULER_REF = "refs/heads/master"
 PRODUCT_REF = "refs/heads/xn-main"
+METADATA_FILE = "UPSTREAM_TRACKING.json"
+BOT_NAME = "XN Upstream Tracker"
+BOT_EMAIL = "xn-upstream-tracker@users.noreply.github.com"
+METADATA_KEYS = {"schema_version", "upstream_repository", "upstream_ref", "upstream_sha",
+                 "previous_upstream_sha", "scheduler_repository", "workflow_sha",
+                 "run_id", "run_attempt", "event"}
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 SUCCESS = {"PLAN_CREATE", "PLAN_FAST_FORWARD", "NO_CHANGE", "CREATED", "UPDATED"}
 
@@ -88,7 +94,8 @@ class Git:
         self.token = token
 
     def run(self, *args: str, authenticated: bool = False,
-            hooks: Path | None = None, extra_env: dict[str, str] | None = None) -> str:
+            hooks: Path | None = None, extra_env: dict[str, str] | None = None,
+            input_text: str | None = None) -> str:
         env = {key: value for key, value in os.environ.items()
                if not key.startswith("GIT_")
                and key not in {"XN_GITHUB_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "CUSTOM_REPO_TOKEN"}}
@@ -104,14 +111,15 @@ class Git:
                    "-c", "credential.helper=", "-c", "protocol.allow=never",
                    "-c", "protocol.https.allow=always", "-c", "http.followRedirects=false",
                    "-c", "fetch.recurseSubmodules=false", "-c", "fetch.fsckObjects=true",
-                   "-c", "transfer.fsckObjects=true", "-c", "push.followTags=false"]
+                   "-c", "transfer.fsckObjects=true", "-c", "push.followTags=false",
+                   "-c", "commit.gpgsign=false"]
         if self.local_testing:
             command += ["-c", "protocol.file.allow=always"]
         command += ["-C", str(self.directory), *args]
         try:
             result = subprocess.run(command, env=env, text=True, encoding="utf-8",
                                     errors="replace", stdout=subprocess.PIPE,
-                                    stderr=subprocess.STDOUT, timeout=600, check=False)
+                                    stderr=subprocess.STDOUT, timeout=600, check=False, input=input_text)
         except (OSError, subprocess.TimeoutExpired) as error:
             raise SyncError("GIT_FAILED", redact(str(error), self.token)) from error
         if result.returncode:
@@ -164,33 +172,127 @@ def protected(refs: dict[str, str]) -> dict[str, str]:
     return {ref: sha for ref, sha in refs.items() if ref != TARGET_REF}
 
 
-def verify_push_input(text: str, expected_before: str, expected_upstream: str) -> bool:
+def verify_push_input(text: str, expected_before: str, expected_metadata: str) -> bool:
     if expected_before != "0" * 40 and not SHA.fullmatch(expected_before):
         return False
-    if not SHA.fullmatch(expected_upstream):
+    if not SHA.fullmatch(expected_metadata):
         return False
     rows = [row.split() for row in text.splitlines() if row.strip()]
     return (len(rows) == 1 and len(rows[0]) == 4
-            and rows[0][1] == expected_upstream and rows[0][2] == TARGET_REF
+            and rows[0][1] == expected_metadata and rows[0][2] == TARGET_REF
             and rows[0][3] == expected_before)
 
 
-def push_tracking(git: Git, target: str, before: str | None, upstream: str) -> None:
+def push_tracking(git: Git, target: str, before: str | None, metadata_commit: str) -> None:
     hooks = git.directory.parent / "trusted-hooks"
     hooks.mkdir()
     hook = hooks / "pre-push"
     hook.write_text('#!/bin/sh\nexec "$XN_SYNC_PYTHON" "$XN_SYNC_SCRIPT" --verify-push\n', encoding="utf-8")
     hook.chmod(0o700)
     try:
-        git.run("push", "--porcelain", target, f"{upstream}:{TARGET_REF}",
+        git.run("push", "--porcelain", target, f"{metadata_commit}:{TARGET_REF}",
                 authenticated=True, hooks=hooks, extra_env={
                     "XN_SYNC_PYTHON": sys.executable,
                     "XN_SYNC_SCRIPT": str(Path(__file__).resolve()),
                     "XN_EXPECTED_TRACKING": before or "0" * 40,
-                    "XN_EXPECTED_UPSTREAM": upstream,
+                    "XN_EXPECTED_METADATA": metadata_commit,
                 })
     except SyncError as error:
         raise SyncError(classify_failure(str(error), "PUSH_FAILED"), str(error)) from error
+
+
+def metadata_for(context: Context, upstream: str, previous: str | None) -> dict:
+    return {
+        "schema_version": 1, "upstream_repository": "rustdesk/rustdesk",
+        "upstream_ref": SOURCE_REF, "upstream_sha": upstream,
+        "previous_upstream_sha": previous, "scheduler_repository": REPOSITORY,
+        "workflow_sha": context.workflow_sha, "run_id": context.run_id,
+        "run_attempt": context.run_attempt, "event": context.event,
+    }
+
+
+def unique_object(pairs: list[tuple[str, object]]) -> dict:
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate metadata key")
+        result[key] = value
+    return result
+
+
+def validate_metadata(value: object) -> dict:
+    if (not isinstance(value, dict) or set(value) != METADATA_KEYS
+            or type(value["schema_version"]) is not int or value["schema_version"] != 1
+            or value["upstream_repository"] != "rustdesk/rustdesk"
+            or value["upstream_ref"] != SOURCE_REF or value["scheduler_repository"] != REPOSITORY
+            or not isinstance(value["upstream_sha"], str) or not SHA.fullmatch(value["upstream_sha"])
+            or (value["previous_upstream_sha"] is not None
+                and (not isinstance(value["previous_upstream_sha"], str)
+                     or not SHA.fullmatch(value["previous_upstream_sha"])))
+            or not isinstance(value["workflow_sha"], str) or not SHA.fullmatch(value["workflow_sha"])
+            or any(not isinstance(value[key], str) or not re.fullmatch(r"[1-9][0-9]*", value[key])
+                   for key in ("run_id", "run_attempt"))
+            or value["event"] not in ("schedule", "workflow_dispatch")):
+        raise SyncError("TRACKING_METADATA_INVALID", "Unexpected metadata schema, identity or field value")
+    return value
+
+
+def read_metadata(git: Git, commit: str) -> dict:
+    tree = git.run("ls-tree", "-z", commit)
+    entry = re.fullmatch(r"100644 blob ([0-9a-f]{40})\tUPSTREAM_TRACKING\.json\x00", tree)
+    if not entry:
+        raise SyncError("TRACKING_METADATA_INVALID", "Tracking tree must contain only the regular metadata file")
+    blob = entry[1]
+    if int(git.run("cat-file", "-s", blob)) > 16384:
+        raise SyncError("TRACKING_METADATA_INVALID", "Metadata exceeds the size limit")
+    try:
+        value = json.loads(git.run("cat-file", "blob", blob), object_pairs_hook=unique_object)
+    except ValueError as error:
+        raise SyncError("TRACKING_METADATA_INVALID", "Metadata is not valid unambiguous JSON") from error
+    return validate_metadata(value)
+
+
+def read_tracking(git: Git, target: str, commit: str) -> dict:
+    git.fetch(target, commit)
+    git.verify_history(commit)
+    previous_commit = None
+    previous_metadata = None
+    # Checking every ancestor prevents a metadata-looking tip from hiding product
+    # or workflow trees in its history. Such a history is not a metadata branch.
+    for line in git.run("rev-list", "--reverse", "--parents", commit).splitlines():
+        row = line.split()
+        if (len(row) not in (1, 2) or not all(SHA.fullmatch(sha) for sha in row)
+                or row[1:] != ([] if previous_commit is None else [previous_commit])):
+            raise SyncError("TRACKING_METADATA_INVALID", "Tracking history must be one root followed by a linear chain")
+        metadata = read_metadata(git, row[0])
+        if metadata["previous_upstream_sha"] != (previous_metadata["upstream_sha"]
+                                                  if previous_metadata else None):
+            raise SyncError("TRACKING_METADATA_INVALID", "Metadata does not link to the previous recorded upstream")
+        previous_commit, previous_metadata = row[0], metadata
+    if previous_commit != commit or previous_metadata is None:
+        raise SyncError("TRACKING_METADATA_INVALID", "Missing metadata history")
+    return previous_metadata
+
+
+def create_metadata_commit(git: Git, context: Context, upstream: str,
+                           previous: str | None, parent: str | None) -> str:
+    metadata = validate_metadata(metadata_for(context, upstream, previous))
+    blob = git.run("hash-object", "-w", "--stdin",
+                   input_text=json.dumps(metadata, ensure_ascii=True, indent=2) + "\n")
+    # NUL framing avoids platform text-pipe newline conversion becoming part
+    # of the filename (notably CRLF on Windows).
+    tree = git.run("mktree", "-z", input_text=f"100644 blob {blob}\t{METADATA_FILE}\0")
+    commit = git.run("commit-tree", "--no-gpg-sign", tree, *(["-p", parent] if parent else []),
+                     input_text=f"chore(upstream): track {upstream[:12]}\n", extra_env={
+                         "GIT_AUTHOR_NAME": BOT_NAME, "GIT_AUTHOR_EMAIL": BOT_EMAIL,
+                         "GIT_COMMITTER_NAME": BOT_NAME, "GIT_COMMITTER_EMAIL": BOT_EMAIL,
+                     })
+    git.verify_history(commit)
+    if (read_metadata(git, commit) != metadata
+            or git.run("rev-list", "--parents", "-n", "1", commit).split()
+            != [commit, *([parent] if parent else [])]):
+        raise SyncError("TRACKING_METADATA_INVALID", "Generated metadata commit is not the expected root or child")
+    return commit
 
 
 def run_sync(mode: str, context: Context, *, config: Config = Config(),
@@ -201,7 +303,8 @@ def run_sync(mode: str, context: Context, *, config: Config = Config(),
         "repository": context.repository, "workflow_sha": context.workflow_sha,
         "run_id": context.run_id, "run_attempt": context.run_attempt, "event": context.event,
         "mode": mode, "upstream_repository": "rustdesk/rustdesk", "upstream_sha": None,
-        "tracking_before": None, "tracking_after": None, "xn_main_observed_sha": None,
+        "tracking_commit_before": None, "tracking_commit_after": None,
+        "tracked_upstream_before": None, "tracked_upstream_after": None, "xn_main_observed_sha": None,
         "result": "FAILED", "error_classification": None, "error": None,
         "protected_refs_unchanged": None, "candidate_action": None,
         "candidate_label": "候选上游版本", "compare": None,
@@ -231,13 +334,12 @@ def run_sync(mode: str, context: Context, *, config: Config = Config(),
                 git.verify_history(upstream)
                 before_refs = git.refs(target)
                 before = before_refs.get(TARGET_REF)
-                report.update(tracking_before=before, tracking_after=before,
+                report.update(tracking_commit_before=before, tracking_commit_after=before,
                               xn_main_observed_sha=before_refs.get(PRODUCT_REF))
-                if before:
-                    git.fetch(target, before)
-                    git.verify_history(upstream, before)
-                action = ("CREATE" if before is None else "NO_CHANGE" if before == upstream
-                          else "FAST_FORWARD" if git.is_ancestor(before, upstream) else "DIVERGED")
+                previous = read_tracking(git, target, before)["upstream_sha"] if before else None
+                report.update(tracked_upstream_before=previous, tracked_upstream_after=previous)
+                action = ("CREATE" if before is None else "NO_CHANGE" if previous == upstream
+                          else "FAST_FORWARD_CANDIDATE" if git.is_ancestor(previous, upstream) else "DIVERGED")
                 report["candidate_action"] = action
                 report["compare"] = {
                     "base": report["xn_main_observed_sha"], "head": upstream,
@@ -247,7 +349,9 @@ def run_sync(mode: str, context: Context, *, config: Config = Config(),
                                          if report["xn_main_observed_sha"] else None),
                 }
                 if action == "DIVERGED":
-                    raise SyncError("UPSTREAM_DIVERGED", "Tracking is not an ancestor of the locked upstream commit")
+                    raise SyncError("UPSTREAM_DIVERGED", "Recorded upstream is not an ancestor of the locked official commit")
+                expected_commit = before
+                expected_metadata = None
                 if mode == "apply" and action != "NO_CHANGE":
                     if _test_remotes is None and not token:
                         raise SyncError("AUTH_CAPABILITY_BLOCKED", "The Actions GITHUB_TOKEN is required for writing")
@@ -256,29 +360,53 @@ def run_sync(mode: str, context: Context, *, config: Config = Config(),
                         raise SyncError("TRACKING_CHANGED", "Tracking changed before push")
                     if protected(current) != protected(before_refs):
                         raise SyncError("PROTECTED_REFS_CHANGED", "Protected refs changed before push")
+                    expected_metadata = metadata_for(context, upstream, previous)
+                    expected_commit = create_metadata_commit(git, context, upstream, previous, before)
                     # The hook also checks the receive-pack advertisement. Ordinary Git
                     # push then uses the server's old-OID comparison for the final race.
-                    push_tracking(git, target, before, upstream)
+                    push_tracking(git, target, before, expected_commit)
                 after_refs = git.refs(target)
-                report["tracking_after"] = after_refs.get(TARGET_REF)
+                report["tracking_commit_after"] = after_refs.get(TARGET_REF)
                 report["protected_refs_unchanged"] = protected(before_refs) == protected(after_refs)
                 if not report["protected_refs_unchanged"]:
                     raise SyncError("PROTECTED_REFS_CHANGED", "Protected refs changed during this observation")
-                expected = upstream if mode == "apply" else before
-                if report["tracking_after"] != expected:
+                if report["tracking_commit_after"] != expected_commit:
                     raise SyncError("POST_PUSH_MISMATCH" if mode == "apply" else "TRACKING_CHANGED",
                                     "Observed tracking SHA does not match the expected result")
-                report["result"] = ("NO_CHANGE" if action == "NO_CHANGE" else f"PLAN_{action}"
+                if expected_commit:
+                    try:
+                        observed_metadata = read_tracking(git, target, expected_commit)
+                    except SyncError as error:
+                        if mode == "apply" and expected_metadata:
+                            raise SyncError("POST_PUSH_MISMATCH", "Remote metadata could not be verified") from error
+                        raise
+                    report["tracked_upstream_after"] = observed_metadata["upstream_sha"]
+                    if expected_metadata and observed_metadata != expected_metadata:
+                        raise SyncError("POST_PUSH_MISMATCH", "Remote metadata does not match the locked candidate and previous record")
+                    if mode == "plan" and report["tracked_upstream_after"] != previous:
+                        raise SyncError("TRACKING_CHANGED", "Recorded upstream changed during plan")
+                report["result"] = ("NO_CHANGE" if action == "NO_CHANGE" else "PLAN_FAST_FORWARD"
+                                    if mode == "plan" and action == "FAST_FORWARD_CANDIDATE" else f"PLAN_{action}"
                                     if mode == "plan" else "CREATED" if action == "CREATE" else "UPDATED")
+                if expected_metadata is not None and _test_remotes is None:
+                    report["auth_capability_live"] = "WRITE_VERIFIED"
             except SyncError:
                 if before_refs is not None:
                     try:
                         observed = git.refs(target)
-                        report["tracking_after"] = observed.get(TARGET_REF)
-                        report["protected_refs_unchanged"] = protected(before_refs) == protected(observed)
                     except SyncError:
-                        report["tracking_after"] = None
-                        report["protected_refs_unchanged"] = None
+                        report.update(tracking_commit_after=None, tracked_upstream_after=None,
+                                      protected_refs_unchanged=None)
+                    else:
+                        report["tracking_commit_after"] = observed.get(TARGET_REF)
+                        report["tracked_upstream_after"] = None
+                        report["protected_refs_unchanged"] = protected(before_refs) == protected(observed)
+                        if report["tracking_commit_after"]:
+                            try:
+                                report["tracked_upstream_after"] = read_tracking(
+                                    git, target, report["tracking_commit_after"])["upstream_sha"]
+                            except SyncError:
+                                report["tracked_upstream_after"] = None
                 raise
     except SyncError as error:
         report.update(result=error.classification, error_classification=error.classification,
@@ -292,7 +420,8 @@ def write_report(report: dict, path: Path, summary: Path | None) -> None:
     if summary:
         lines = ["### 候选上游版本", "", "此报告不表示产品整合或产品验证通过。", ""]
         for key in ("repository", "workflow_sha", "run_id", "run_attempt", "event", "mode",
-                    "upstream_repository", "upstream_sha", "tracking_before", "tracking_after",
+                    "upstream_repository", "upstream_sha", "tracking_commit_before", "tracking_commit_after",
+                    "tracked_upstream_before", "tracked_upstream_after", "candidate_action", "auth_capability_live",
                     "xn_main_observed_sha", "result", "error_classification", "protected_refs_unchanged"):
             value = html.escape(str(report[key])).replace("`", "&#96;")
             lines.append(f"- {key}: <code>{value}</code>")
@@ -307,7 +436,7 @@ def write_report(report: dict, path: Path, summary: Path | None) -> None:
 def main() -> int:
     if sys.argv[1:] == ["--verify-push"]:
         ok = verify_push_input(sys.stdin.read(), os.environ.get("XN_EXPECTED_TRACKING", ""),
-                               os.environ.get("XN_EXPECTED_UPSTREAM", ""))
+                               os.environ.get("XN_EXPECTED_METADATA", ""))
         if not ok:
             print("TRACKING_RACE: advertised tracking changed or unexpected refspec", file=sys.stderr)
         return 0 if ok else 1
