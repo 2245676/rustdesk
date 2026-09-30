@@ -163,7 +163,11 @@ class ServerModel with ChangeNotifier {
           updateClientState(res);
         } else {
           if (_clients.isEmpty) {
-            hideCmWindow();
+            if (hideCm) {
+              hideCmWindow();
+            } else {
+              minimizeCmWindow();
+            }
             if (_zeroClientLengthCounter++ == 12) {
               // 6 second
               windowManager.close();
@@ -517,7 +521,11 @@ class ServerModel with ChangeNotifier {
     }
     if (desktopType == DesktopType.cm) {
       if (_clients.isEmpty) {
-        hideCmWindow();
+        if (hideCm) {
+          hideCmWindow();
+        } else {
+          minimizeCmWindow();
+        }
       } else if (!hideCm) {
         if (_clients.any((client) => !client.authorized)) {
           restoreCmWindow();
@@ -734,7 +742,11 @@ class ServerModel with ChangeNotifier {
         parent.target?.invokeMethod("cancel_notification", id);
       }
       if (desktopType == DesktopType.cm && _clients.isEmpty) {
-        hideCmWindow();
+        if (hideCm) {
+          hideCmWindow();
+        } else {
+          minimizeCmWindow();
+        }
       }
       if (isAndroid) androidUpdatekeepScreenOn();
       notifyListeners();
