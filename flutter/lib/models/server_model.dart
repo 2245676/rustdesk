@@ -594,7 +594,9 @@ class ServerModel with ChangeNotifier {
         onTap: () {},
         page: desktop.buildConnectionCard(client)));
     Future.delayed(Duration.zero, () async {
-      if (!hideCm) windowOnTop(null);
+      if (!hideCm && !client.authorized) {
+        windowOnTop(null);
+      }
     });
     // Only do the hidden task when on Desktop.
     if (client.authorized && isDesktop) {
