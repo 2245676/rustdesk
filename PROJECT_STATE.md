@@ -181,3 +181,8 @@
 - This design intentionally avoids transmitting official upstream workflow-file history to the fork, so it does not require elevated workflows permission or a PAT.
 - Reviewed commit is now deployed to default branch `master` at `ab68b929ba9a6f84df4c490038a0cc6542338dcc`.
 - Real `refs/heads/upstream-tracking` is still absent. Real metadata-v2 apply/write capability and real `event=schedule` execution are not yet verified.
+
+## P0-01E Review Status
+- Initial exact-SHA release preparation commit `029d65b1dddbcdc4f112e0552552e59a0e25e372` completed 61/61 offline tests but Main AI review is REWORK_REQUIRED.
+- Blocking finding: the design creates the release tag from Actions with the default `GITHUB_TOKEN`. GitHub ref creation can require Workflows write when the target commit's `.github/workflows/*` differs from the default branch; current `xn-main` and `master` do have workflow-file differences. The default Actions token cannot obtain that Workflows permission.
+- Direction: Actions must not create/move the XN release tag. Redesign around a pre-existing immutable tag created by the authorized local release controller, then run the release workflow from that tag and verify exact tag/source identity before and after build.
