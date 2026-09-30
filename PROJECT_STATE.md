@@ -26,7 +26,8 @@
 - C2B mobile custom shortcut UI integration PASS after independent review (0 findings / 0 blocking findings).
 - C2C canonical CI / behavior gate PASS. Full Flutter CI Run `36450368096` completed SUCCESS; default bridge and Android arm64/armv7/x86_64 all PASS.
 - C2 Human Acceptance remains PENDING and is deferred to P0-01F real-device regression/acceptance.
-- Next step: P0-01C-C3 — redesign and migrate authorized connection-manager behavior with security review.
+- C3A authorized Connection Manager behavior implementation and final independent security review PASS (0 findings / 0 blocking findings).
+- Next step: C3 canonical Windows CI gate.
 
 ## Completed
 - Fork established from RustDesk.
@@ -42,7 +43,7 @@
 - Phase 0 controlled re-application of XN customizations.
 - C1 Human Acceptance: PENDING.
 - C2 mobile shortcut/action system: implementation/review/CI PASS — C2A PASS; C2B PASS; C2C PASS. Human Acceptance remains PENDING for P0-01F.
-- C3 authorized connection-manager behavior: pending redesign / security review.
+- C3 authorized connection-manager behavior: IN PROGRESS — C3A implementation/security review PASS; canonical Windows CI pending.
 
 ## Blocked
 - New feature development is STILL BLOCKED until Phase 0 recovery gates pass.
@@ -61,7 +62,7 @@
 - Future product-direction decision: optimized personal remote-control client vs. broader managed-device platform.
 
 ## Next
-1. P0-01C-C3 — redesign and migrate authorized connection-manager behavior with security review.
+1. P0-01C-C3 — canonical Windows CI gate for authorized Connection Manager behavior.
 2. P0-01D — repair upstream-sync automation.
 3. P0-01E — repair exact-SHA release traceability.
 4. P0-01F — Android + Windows regression, install verification, and Human Acceptance.
@@ -83,6 +84,19 @@
   - Android arm64
   - Android armv7
   - Android x86_64
+
+## P0-01C-C3A Verification Evidence
+- C3A product baseline: `b0163b82391bb3031cff9a07680d11edcb55515e`.
+- C3A accepted product head: `4aab9c59d731fe1377419eeccba191903fca64e2`.
+- Final C3A product diff contains only `flutter/lib/main.dart` and `flutter/lib/models/server_model.dart`.
+- `showCmWindow({bool isStartup = false})` signature remains unchanged; restore/minimize behavior is separated into dedicated helpers.
+- Connection Manager startup policy is gated by `_cmWindowPolicyReady`; ServerModel does not mutate CM visibility/focus before startup window initialization completes.
+- After startup helper completion, `onCmWindowInitialized()` marks policy ready and immediately applies current client state.
+- `hideCm=false`: idle CM remains minimized instead of hidden; authorized-only sessions do not actively restore/show/focus the CM; unauthorized sessions restore/focus approval UI.
+- Authorized auto-minimize timer is cancelled on unauthorized arrival and rechecks readiness, hide policy, and absence of unauthorized clients at fire time.
+- `hideCm=true` semantics preserved; 500 ms / approximately 6-second zero-client close behavior preserved.
+- Final independent Security Reviewer decision: PASS; findings 0; blocking findings 0; prior startup race F-01 CLOSED.
+- Human window-behavior acceptance is not claimed here and remains for P0-01F.
 
 ## P0-01C-C2C Verification Evidence
 - Full Flutter CI Run `36450368096` — event `pull_request` — conclusion SUCCESS.
