@@ -29,7 +29,7 @@
 - C3A authorized Connection Manager behavior implementation and final independent security review PASS (0 findings / 0 blocking findings).
 - C3 canonical Full Flutter CI Run `36728627973` completed SUCCESS; Windows x64/ARM64/i686 and canonical Flutter 3.22.3 bridge PASS.
 - P0-01D preparation implementation and independent source/security review PASS on commit `4279287aa977556159626f09e8fe9c048946d1c6`; deployed by fast-forward to default branch `master` for activation testing.
-- P0-01D live workflow_dispatch/apply/schedule verification remains PENDING.
+- P0-01D live plan verification PASS. Live apply is BLOCKED by GitHub's workflow-file permission boundary: the default Actions `GITHUB_TOKEN` cannot create `upstream-tracking` directly at an official upstream commit whose history updates `.github/workflows/*`. No ref was created and protected refs remained unchanged. Architecture redesign is required before schedule verification.
 
 ## Completed
 - Fork established from RustDesk.
@@ -46,7 +46,7 @@
 - C1 Human Acceptance: PENDING.
 - C2 mobile shortcut/action system: implementation/review/CI PASS — C2A PASS; C2B PASS; C2C PASS. Human Acceptance remains PENDING for P0-01F.
 - C3 authorized connection-manager behavior: automated implementation/security/canonical Windows CI gates PASS; Human Acceptance remains PENDING for P0-01F.
-- P0-01D upstream-sync automation: implementation/review/deployment PASS; live dispatch/apply/schedule verification PENDING.
+- P0-01D upstream-sync automation: implementation/review/deployment and live plan PASS; live apply BLOCKED on `AUTH_CAPABILITY_BLOCKED` for workflow-file history, redesign pending.
 
 ## Blocked
 - New feature development is STILL BLOCKED until Phase 0 recovery gates pass.
@@ -64,7 +64,7 @@
 - Future product-direction decision: optimized personal remote-control client vs. broader managed-device platform.
 
 ## Next
-1. P0-01D — live workflow_dispatch plan/apply and real schedule verification for upstream tracking automation.
+1. P0-01D — redesign tracking representation to avoid elevated workflow-write credentials, then re-run live apply and real schedule verification.
 2. P0-01E — repair exact-SHA release traceability.
 3. P0-01F — Android + Windows regression, install verification, and Human Acceptance.
 
@@ -166,3 +166,10 @@
 - ACT-01 deployed the exact reviewed commit to default branch `master` by fast-forward; no new deployment commit was created.
 - Workflow registered ACTIVE. No real workflow_dispatch/apply/schedule has yet been accepted as verified.
 - Existing Full Flutter CI push run `36737578394` hit the pre-existing reusable-workflow caller permission startup failure; this is not introduced by P0-01D. Existing CI push run `36737576992` was normally triggered because the deployment added non-ignored `scripts/**` and `tests/**` paths.
+
+## P0-01D Live Activation Blocker
+- Live plan run `36744792281` PASS: mode=plan, result=PLAN_CREATE, apply skipped, no remote ref write.
+- Live apply run `36746343185` FAILED safely with `AUTH_CAPABILITY_BLOCKED`.
+- GitHub rejected creation of `refs/heads/upstream-tracking` at official upstream SHA `fada664df7a294d1d1a9ca3e7cd3637069122f17` because the GitHub App token lacks permission to create/update workflow history containing `.github/workflows/flutter-build.yml`.
+- `upstream-tracking` remains absent; master/xn-main/legacy/restore/tags were unchanged.
+- Decision: do not add a long-lived elevated PAT merely to mirror the exact upstream commit. Redesign the tracking branch as trusted metadata that records the exact official upstream SHA while remaining based on fork-owned history and using the default `GITHUB_TOKEN`.
