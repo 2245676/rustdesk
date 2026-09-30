@@ -29,7 +29,7 @@
 - C3A authorized Connection Manager behavior implementation and final independent security review PASS (0 findings / 0 blocking findings).
 - C3 canonical Full Flutter CI Run `36728627973` completed SUCCESS; Windows x64/ARM64/i686 and canonical Flutter 3.22.3 bridge PASS.
 - P0-01D preparation implementation and independent source/security review PASS on commit `4279287aa977556159626f09e8fe9c048946d1c6`; deployed by fast-forward to default branch `master` for activation testing.
-- P0-01D live plan verification PASS. Live apply is BLOCKED by GitHub's workflow-file permission boundary: the default Actions `GITHUB_TOKEN` cannot create `upstream-tracking` directly at an official upstream commit whose history updates `.github/workflows/*`. No ref was created and protected refs remained unchanged. Architecture redesign is required before schedule verification.
+- P0-01D live plan verification PASS. The original exact-commit tracking apply was safely blocked by GitHub's workflow-file permission boundary. Metadata-only tracking v2 was implemented, independently security-reviewed PASS (34/34 tests, 0 findings), and deployed to default branch `master` at `ab68b929ba9a6f84df4c490038a0cc6542338dcc`. Real metadata-v2 schedule/apply verification remains PENDING.
 
 ## Completed
 - Fork established from RustDesk.
@@ -46,7 +46,7 @@
 - C1 Human Acceptance: PENDING.
 - C2 mobile shortcut/action system: implementation/review/CI PASS — C2A PASS; C2B PASS; C2C PASS. Human Acceptance remains PENDING for P0-01F.
 - C3 authorized connection-manager behavior: automated implementation/security/canonical Windows CI gates PASS; Human Acceptance remains PENDING for P0-01F.
-- P0-01D upstream-sync automation: implementation/review/deployment and live plan PASS; live apply BLOCKED on `AUTH_CAPABILITY_BLOCKED` for workflow-file history, redesign pending.
+- P0-01D upstream-sync automation: metadata-v2 implementation/review/deployment PASS; original exact-commit apply blocker eliminated by design; real metadata-v2 schedule/apply verification PENDING.
 
 ## Blocked
 - New feature development is STILL BLOCKED until Phase 0 recovery gates pass.
@@ -64,7 +64,7 @@
 - Future product-direction decision: optimized personal remote-control client vs. broader managed-device platform.
 
 ## Next
-1. P0-01D — redesign tracking representation to avoid elevated workflow-write credentials, then re-run live apply and real schedule verification.
+1. P0-01D — verify real metadata-v2 scheduled apply, resulting `upstream-tracking` metadata branch, token write capability, and protected-ref preservation.
 2. P0-01E — repair exact-SHA release traceability.
 3. P0-01F — Android + Windows regression, install verification, and Human Acceptance.
 
@@ -173,3 +173,11 @@
 - GitHub rejected creation of `refs/heads/upstream-tracking` at official upstream SHA `fada664df7a294d1d1a9ca3e7cd3637069122f17` because the GitHub App token lacks permission to create/update workflow history containing `.github/workflows/flutter-build.yml`.
 - `upstream-tracking` remains absent; master/xn-main/legacy/restore/tags were unchanged.
 - Decision: do not add a long-lived elevated PAT merely to mirror the exact upstream commit. Redesign the tracking branch as trusted metadata that records the exact official upstream SHA while remaining based on fork-owned history and using the default `GITHUB_TOKEN`.
+
+## P0-01D Metadata V2 Evidence
+- Metadata-v2 delivery commit: `ab68b929ba9a6f84df4c490038a0cc6542338dcc` on `ci/p0-01d-metadata-tracking-v2`; direct parent `4279287aa977556159626f09e8fe9c048946d1c6`.
+- Independent Security Reviewer: PASS; tests 34/34; findings 0; blocking findings 0.
+- Model: `upstream-tracking` is metadata-only. Each commit tree contains only `UPSTREAM_TRACKING.json`; the recorded official upstream SHA is metadata, not the tracking commit itself.
+- This design intentionally avoids transmitting official upstream workflow-file history to the fork, so it does not require elevated workflows permission or a PAT.
+- Reviewed commit is now deployed to default branch `master` at `ab68b929ba9a6f84df4c490038a0cc6542338dcc`.
+- Real `refs/heads/upstream-tracking` is still absent. Real metadata-v2 apply/write capability and real `event=schedule` execution are not yet verified.
