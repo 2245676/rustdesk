@@ -30,6 +30,7 @@
 - C3 canonical Full Flutter CI Run `36728627973` completed SUCCESS; Windows x64/ARM64/i686 and canonical Flutter 3.22.3 bridge PASS.
 - P0-01D preparation implementation and independent source/security review PASS on commit `4279287aa977556159626f09e8fe9c048946d1c6`; deployed by fast-forward to default branch `master` for activation testing.
 - P0-01D live plan verification PASS. The original exact-commit tracking apply was safely blocked by GitHub's workflow-file permission boundary. Metadata-only tracking v2 was implemented, independently security-reviewed PASS (34/34 tests, 0 findings), and deployed to default branch `master` at `ab68b929ba9a6f84df4c490038a0cc6542338dcc`. Real metadata-v2 schedule/apply verification remains PENDING.
+- P0-01E exact-SHA release traceability is VERIFIED / PASS. Live tag-first Release Run `36824489661` built from source `3685852e4ab2e60425aa5883e2fa0b64e963bca3`; the lightweight release tag and traceability manifest resolve to that exact SHA, and APK/EXE evidence was verified.
 
 ## Completed
 - Fork established from RustDesk.
@@ -65,8 +66,7 @@
 
 ## Next
 1. P0-01D — verify real metadata-v2 scheduled apply, resulting `upstream-tracking` metadata branch, token write capability, and protected-ref preservation.
-2. P0-01E — repair exact-SHA release traceability.
-3. P0-01F — Android + Windows regression, install verification, and Human Acceptance.
+2. P0-01F — Android + Windows regression, install verification, and Human Acceptance.
 
 ## Verification Baseline
 - xn-main upstream baseline: SHA `39d4f1854b6fc0ebf6df2477598b970e6d1f73bf`
@@ -211,3 +211,16 @@
 - Coding-agent integration evidence: 74/74 focused tests PASS, actionlint PASS, diff check PASS, worktree clean. No real release tag or GitHub Release was created during integration.
 - P0-01E overall remains IN PROGRESS. The next gate is a separately authorized live tag-first release: read-only local-plan, Main-AI approval of the exact current xn-main SHA, then `local-create --expected-sha <approved SHA>`, followed by verification of the resulting tag-triggered build/release, APK/EXE evidence and traceability manifest.
 - XN-002 remains OPEN until that live release gate passes.
+
+## P0-01E Live Release Verification — FINAL PASS
+- Main AI decision: **P0-01E = PASS / VERIFIED**.
+- Authorized release source: `3685852e4ab2e60425aa5883e2fa0b64e963bca3`.
+- Release tag: `xn-release-3685852e4ab2e60425aa5883e2fa0b64e963bca3`; Git ref type `commit`; final tag SHA exactly equals the authorized source SHA.
+- Live Actions Run `36824489661`: event `push`, head branch exact release tag, head SHA exact authorized source, overall conclusion SUCCESS.
+- Required release gates: `prepare-release` SUCCESS, canonical reusable build graph SUCCESS for enabled jobs, `verify-release` SUCCESS. Preparation log emitted `TAG_VERIFIED`; final verification log emitted `RELEASE_TRACEABILITY_VERIFIED`.
+- GitHub Release ID `400697717`: published, draft=false, prerelease=true, exact release tag. `target_commitish=master` is retained only as GitHub Release metadata and is not accepted as source identity; the pre-existing Git tag is the authoritative source ref.
+- Traceability artifact `xn-release-traceability-36824489661-1` was independently downloaded and inspected. It contains only `XN_RELEASE_TRACEABILITY.json`; manifest source SHA and tag SHA both equal `3685852e4ab2e60425aa5883e2fa0b64e963bca3`, `traceability_verified=true`, release ID matches, and all 7 manifest APK/EXE entries match the real Release assets by ID/name/size/SHA256.
+- Verified release assets include 4 signed APKs and 3 EXEs; all are uploaded and non-empty with SHA256 digests recorded by GitHub.
+- Release operation did not modify `master`, `xn-main`, `custom-nav-controls`, or `restore/xn-remote-20260914-1909`; no unexpected XN release tag or additional tag-triggered Actions run was observed.
+- No force, tag deletion, tag movement, or retag operation was used.
+- XN-002 is now eligible for VERIFIED status. The historical broken release/tag remains preserved as evidence; verification is based on the new exact-SHA release path, not rewriting history.
