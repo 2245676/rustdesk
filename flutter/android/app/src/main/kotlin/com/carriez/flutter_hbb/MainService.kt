@@ -61,6 +61,11 @@ const val MAX_SCREEN_SIZE = 1200
 const val VIDEO_KEY_BIT_RATE = 1024_000
 const val VIDEO_KEY_FRAME_RATE = 30
 
+// 4 seconds is generous for the first frame on a healthy capture pipeline.
+// A capture that fails to produce a frame in this window is treated as
+// unhealthy and triggers one bounded recovery attempt.
+const val FIRST_FRAME_TIMEOUT_MS = 4000L
+
 class MainService : Service() {
 
     @Keep
@@ -128,8 +133,11 @@ class MainService : Service() {
                         translate("Share screen")
                     }
                     if (authorized) {
-                        if (!isFileTransfer && !isStart) {
-                            startCapture()
+                        if (!isFileTransfer) {
+                            captureWanted = true
+                            resetCaptureCycle()
+                            Log.d("XN_CAPTURE_RECOVERY", "authorized_connection id=$id")
+                            ensureCaptureAvailable("authorized_connection")
                         }
                         onClientAuthorizedNotification(id, type, username, peerId)
                     } else {
@@ -168,6 +176,8 @@ class MainService : Service() {
             }
             "stop_capture" -> {
                 Log.d(logTag, "from rust:stop_capture")
+                captureWanted = false
+                resetCaptureCycle()
                 stopCapture()
             }
             "half_scale" -> {
@@ -227,6 +237,20 @@ class MainService : Service() {
     private var videoEncoder: MediaCodec? = null
     private var imageReader: ImageReader? = null
     private var virtualDisplay: VirtualDisplay? = null
+
+    // capture recovery state — see CaptureRecovery.kt for the decision logic
+    @Volatile private var captureWanted: Boolean = false
+    @Volatile private var recoveryRequestInFlight: Boolean = false
+    @Volatile private var captureGeneration: Int = 0
+    @Volatile private var firstFrameReceived: Boolean = false
+    @Volatile private var hasRebuiltThisCycle: Boolean = false
+    @Volatile private var hasRequestedPermissionThisCycle: Boolean = false
+    private var firstFrameTimeoutRunnable: Runnable? = null
+
+    private fun resetCaptureCycle() {
+        hasRebuiltThisCycle = false
+        hasRequestedPermissionThisCycle = false
+    }
 
     // audio
     private val audioRecordHandle = AudioRecordHandle(this, { isStart }, { isAudioStart })
@@ -370,6 +394,14 @@ class MainService : Service() {
     }
 
     private fun requestMediaProjection(recovery: Boolean = false) {
+        if (recovery && recoveryRequestInFlight) {
+            Log.d("XN_CAPTURE_RECOVERY", "permission_dedup")
+            return
+        }
+        if (recovery) {
+            recoveryRequestInFlight = true
+            hasRequestedPermissionThisCycle = true
+        }
         val intent = Intent(this, PermissionRequestTransparentActivity::class.java).apply {
             action = ACT_REQUEST_MEDIA_PROJECTION
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
@@ -382,8 +414,16 @@ class MainService : Service() {
 
     @Synchronized
     private fun cancelMediaProjectionRecovery() {
+        Log.d("XN_CAPTURE_RECOVERY", "permission_denied")
         captureRestartPending = false
         captureRestartInVoiceCall = false
+        recoveryRequestInFlight = false
+        // Clear stale capture lifecycle so the UI does not get pinned to a
+        // "waiting for image" condition the projection may now never satisfy.
+        _isStart = false
+        _isReady = false
+        // CaptureWanted is preserved: a future new authorized connection
+        // may reset the cycle and try again.
     }
 
     @SuppressLint("WrongConstant")
@@ -409,6 +449,7 @@ class MainService : Service() {
                                 val buffer = planes[0].buffer
                                 buffer.rewind()
                                 FFI.onVideoFrameUpdate(buffer)
+                                onFirstFrameReceived()
                             }
                         } catch (ignored: java.lang.Exception) {
                         }
@@ -416,6 +457,118 @@ class MainService : Service() {
                 }
             Log.d(logTag, "ImageReader.setOnImageAvailableListener done")
             imageReader?.surface
+        }
+    }
+
+    @Synchronized
+    private fun ensureCaptureAvailable(reason: String) {
+        val state = CaptureRecovery.State(
+            captureWanted = captureWanted,
+            recoveryRequestInFlight = recoveryRequestInFlight,
+            isStart = _isStart,
+            projectionAlive = mediaProjection != null,
+            hasRebuiltThisCycle = hasRebuiltThisCycle,
+            hasRequestedPermissionThisCycle = hasRequestedPermissionThisCycle,
+        )
+        when (CaptureRecovery.decideEnsure(state)) {
+            CaptureRecovery.Decision.NONE -> {
+                if (CaptureRecovery.shouldResetCycleAfterSuccess(
+                        _isStart,
+                        mediaProjection != null,
+                        firstFrameReceived,
+                    )
+                ) {
+                    resetCaptureCycle()
+                }
+            }
+            CaptureRecovery.Decision.REBUILD -> {
+                hasRebuiltThisCycle = true
+                Log.d("XN_CAPTURE_RECOVERY", "stale_capture_detected reason=$reason")
+                if (!startCapture()) {
+                    // Rebuild attempt failed (e.g., VirtualDisplay creation
+                    // raised an exception, or the surface could not be
+                    // created). Escalate to release + permission request so
+                    // the bounded cycle covers both A and B. If a permission
+                    // request was already issued in this cycle, the cycle is
+                    // exhausted and we mark recovery failed.
+                    Log.w("XN_CAPTURE_RECOVERY", "rebuild_failed reason=$reason")
+                    if (!hasRequestedPermissionThisCycle) {
+                        releaseMediaProjection()
+                        _isReady = false
+                        hasRequestedPermissionThisCycle = true
+                        requestMediaProjection(true)
+                    } else {
+                        Log.w("XN_CAPTURE_RECOVERY", "recovery_failed reason=$reason")
+                    }
+                }
+            }
+            CaptureRecovery.Decision.REQUEST_PERMISSION -> {
+                hasRequestedPermissionThisCycle = true
+                Log.d("XN_CAPTURE_RECOVERY", "recovery_requested reason=$reason")
+                requestMediaProjection(true)
+            }
+        }
+    }
+
+    private fun onCaptureStarted() {
+        val gen = captureGeneration + 1
+        captureGeneration = gen
+        firstFrameReceived = false
+        Log.d("XN_CAPTURE_RECOVERY", "capture_started gen=$gen")
+        firstFrameTimeoutRunnable?.let { serviceHandler?.removeCallbacks(it) }
+        val timeoutRunnable = Runnable {
+            onFirstFrameTimeout()
+        }
+        firstFrameTimeoutRunnable = timeoutRunnable
+        serviceHandler?.postDelayed(timeoutRunnable, FIRST_FRAME_TIMEOUT_MS)
+    }
+
+    private fun onFirstFrameReceived() {
+        if (firstFrameReceived) return
+        firstFrameReceived = true
+        val gen = captureGeneration
+        Log.d("XN_CAPTURE_RECOVERY", "first_frame gen=$gen")
+        firstFrameTimeoutRunnable?.let {
+            serviceHandler?.removeCallbacks(it)
+            firstFrameTimeoutRunnable = null
+        }
+        if (CaptureRecovery.shouldResetCycleAfterSuccess(
+                _isStart,
+                mediaProjection != null,
+                firstFrameReceived,
+            )
+        ) {
+            resetCaptureCycle()
+        }
+    }
+
+    private fun onFirstFrameTimeout() {
+        val decision = CaptureRecovery.decideFirstFrameTimeout(
+            captureWanted = captureWanted,
+            firstFrameReceived = firstFrameReceived,
+            recoveryRequestInFlight = recoveryRequestInFlight,
+            projectionAlive = mediaProjection != null,
+            hasRequestedPermissionThisCycle = hasRequestedPermissionThisCycle,
+        )
+        if (!decision.shouldMarkRecoveryFailed &&
+            !decision.shouldReleaseProjection &&
+            !decision.shouldRequestPermission
+        ) {
+            return
+        }
+        Log.w(
+            "XN_CAPTURE_RECOVERY",
+            "first_frame_timeout gen=$captureGeneration wanted=$captureWanted"
+        )
+        stopCapture()
+        if (decision.shouldReleaseProjection) {
+            releaseMediaProjection()
+            _isReady = false
+        }
+        if (decision.shouldRequestPermission) {
+            requestMediaProjection(true)
+        } else if (decision.shouldMarkRecoveryFailed) {
+            Log.w("XN_CAPTURE_RECOVERY", "recovery_failed")
         }
     }
 
@@ -436,6 +589,7 @@ class MainService : Service() {
             return
         }
         Log.d(logTag, "MediaProjection stopped")
+        Log.d("XN_CAPTURE_RECOVERY", "projection_stopped")
         setMediaProjectionForegroundService(false)
         stopCapture()
         virtualDisplay?.release()
@@ -444,6 +598,9 @@ class MainService : Service() {
         mediaProjectionCallback = null
         _isReady = false
         checkMediaPermission()
+        if (captureWanted) {
+            ensureCaptureAvailable("projection_stopped")
+        }
     }
 
     @Synchronized
@@ -452,7 +609,7 @@ class MainService : Service() {
         resultIntent: Intent,
     ) {
         val wasCapturing = isStart
-        val restartCapture = wasCapturing || captureRestartPending
+        val restartCapture = wasCapturing || captureRestartPending || captureWanted
         val restartInVoiceCall = if (wasCapturing) {
             audioRecordHandle.isVoiceCallActive()
         } else {
@@ -475,6 +632,14 @@ class MainService : Service() {
                 _isReady = false
                 setMediaProjectionForegroundService(false)
                 checkMediaPermission()
+            } else {
+                // Old projection was released, new one failed to install.
+                // Clear the recovery state so future cycles can retry
+                // instead of being wedged in "permission in flight".
+                recoveryRequestInFlight = false
+                _isReady = false
+                setMediaProjectionForegroundService(false)
+                checkMediaPermission()
             }
             return
         }
@@ -493,6 +658,7 @@ class MainService : Service() {
         projection.registerCallback(callback, Handler(Looper.getMainLooper()))
         mediaProjection = projection
         mediaProjectionCallback = callback
+        recoveryRequestInFlight = false
         _isReady = true
         checkMediaPermission()
         if (restartCapture) {
@@ -609,6 +775,7 @@ class MainService : Service() {
         captureRestartInVoiceCall = false
         checkMediaPermission()
         _isStart = true
+        onCaptureStarted()
         FFI.setFrameRawEnable("video",true)
         MainActivity.rdClipboardManager?.setCaptureStarted(_isStart)
         return true
@@ -634,6 +801,11 @@ class MainService : Service() {
         captureRestartInVoiceCall = false
         FFI.setFrameRawEnable("video",false)
         _isStart = false
+        firstFrameReceived = false
+        firstFrameTimeoutRunnable?.let {
+            serviceHandler?.removeCallbacks(it)
+            firstFrameTimeoutRunnable = null
+        }
         MainActivity.rdClipboardManager?.setCaptureStarted(_isStart)
         // release video
         if (reuseVirtualDisplay) {
