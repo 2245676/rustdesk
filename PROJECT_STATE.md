@@ -224,3 +224,11 @@
 - Release operation did not modify `master`, `xn-main`, `custom-nav-controls`, or `restore/xn-remote-20260914-1909`; no unexpected XN release tag or additional tag-triggered Actions run was observed.
 - No force, tag deletion, tag movement, or retag operation was used.
 - XN-002 is now eligible for VERIFIED status. The historical broken release/tag remains preserved as evidence; verification is based on the new exact-SHA release path, not rewriting history.
+
+## P0-01F Automated Regression Gate
+- Coding-agent automated acceptance preparation: READY_FOR_HUMAN_ACCEPTANCE.
+- Current xn-main at automated check: `6123a0c8d15891cfa4ab9c02a3326380ed6f766b`; verified release product source: `3685852e4ab2e60425aa5883e2fa0b64e963bca3`.
+- Product/runtime/build code did not change after the verified release source; only governance files changed.
+- Release Run `36824489661`, Android build gates, and Windows build gates were re-verified PASS.
+- Local acceptance artifacts prepared and hash-verified: universal Android APK SHA256 matched the verified Release asset and package metadata reported `com.carriez.flutter_hbb.custom` / label `XN远控`; Windows x64 EXE SHA256 matched the verified Release asset and PE architecture is x64. Windows Authenticode status is NotSigned and is recorded as evidence, not treated as a blocker by the current release contract.
+- P0-01F automated portion = PASS. Human Acceptance remains PENDING and must be completed by the user on real Android and Windows devices.
