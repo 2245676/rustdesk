@@ -203,3 +203,11 @@
 - Existing-tag release publication is consistent with GitHub's documented release semantics: `target_commitish` is ignored when the tag already exists; GitHub's workflow-scope release restriction applies to workflow-changing target SHAs without an existing ref. Live token/release behavior is still a required production gate.
 - Test source at the reviewed commit contains 74 focused test cases. No check-run is attached to the delivery commit; Main AI review here is a source/security review, not an independent runtime re-execution claim.
 - P0-01E overall remains IN PROGRESS. XN-002 remains OPEN until integration into xn-main, live local credential/tag creation verification, real tag-triggered build/release, exact tag/source verification, APK/EXE evidence, traceability manifest, and release gate review all pass.
+
+## P0-01E Integration Gate
+- Reviewed delivery `f22eba4dcbf2eb85dc1741ec4ad696239fc72516` was integrated byte-for-byte through integration commit `698767d7a08cf10cfe5e26d2e2f4d3da7690357a`.
+- Main AI independently verified the integration branch was exactly one fast-forward commit from `ff92f085944e3af325adf5f00e66ef54037059b1`, with exactly four added files and identical blob SHAs to the reviewed delivery.
+- `xn-main` was advanced with a non-force fast-forward to `698767d7a08cf10cfe5e26d2e2f4d3da7690357a`.
+- Coding-agent integration evidence: 74/74 focused tests PASS, actionlint PASS, diff check PASS, worktree clean. No real release tag or GitHub Release was created during integration.
+- P0-01E overall remains IN PROGRESS. The next gate is a separately authorized live tag-first release: read-only local-plan, Main-AI approval of the exact current xn-main SHA, then `local-create --expected-sha <approved SHA>`, followed by verification of the resulting tag-triggered build/release, APK/EXE evidence and traceability manifest.
+- XN-002 remains OPEN until that live release gate passes.
