@@ -22,6 +22,7 @@ object CaptureRecovery {
         val recoveryRequestInFlight: Boolean,
         val isStart: Boolean,
         val projectionAlive: Boolean,
+        val resourcesHealthy: Boolean,
         val hasRebuiltThisCycle: Boolean,
         val hasRequestedPermissionThisCycle: Boolean,
     )
@@ -32,17 +33,20 @@ object CaptureRecovery {
      * Rules (in order):
      * - captureWanted=false → NONE (user no longer wants capture)
      * - recoveryRequestInFlight → NONE (dedup permission dialogs)
-     * - already healthy → NONE (do not disturb a working capture)
+     * - capture is genuinely healthy (started, projection alive, video
+     *   resources valid) → NONE
      * - both rebuild and permission already attempted in this cycle →
      *   NONE (cycle exhausted; a future authorized connection resets it)
      * - no projection → REQUEST_PERMISSION (unless one was already issued)
-     * - stale isStart with projection alive → REBUILD (unless one was
-     *   already attempted)
+     * - projection alive but isStart stale or resources invalid →
+     *   REBUILD (unless one was already attempted this cycle)
      */
     fun decideEnsure(state: State): Decision {
         if (!state.captureWanted) return Decision.NONE
         if (state.recoveryRequestInFlight) return Decision.NONE
-        if (state.isStart && state.projectionAlive) return Decision.NONE
+        if (state.isStart && state.projectionAlive && state.resourcesHealthy) {
+            return Decision.NONE
+        }
         if (state.hasRebuiltThisCycle && state.hasRequestedPermissionThisCycle) {
             return Decision.NONE
         }
@@ -54,8 +58,10 @@ object CaptureRecovery {
     }
 
     /**
-     * Decision for the first-frame timeout of the current generation.
+     * Decision for the first-frame timeout of a specific capture generation.
      *
+     * - If the timeout's generation is no longer the current generation, do
+     *   nothing (the timeout belongs to a stale capture).
      * - If user no longer wants capture, do nothing.
      * - If first frame was already received, do nothing.
      * - If a permission dialog is open, do nothing.
@@ -70,36 +76,53 @@ object CaptureRecovery {
         val shouldRequestPermission: Boolean,
     )
 
-    fun decideFirstFrameTimeout(
-        captureWanted: Boolean,
-        firstFrameReceived: Boolean,
-        recoveryRequestInFlight: Boolean,
-        projectionAlive: Boolean,
-        hasRequestedPermissionThisCycle: Boolean,
-    ): TimeoutDecision {
-        if (!captureWanted || firstFrameReceived || recoveryRequestInFlight) {
+    data class TimeoutState(
+        val captureWanted: Boolean,
+        val firstFrameReceived: Boolean,
+        val recoveryRequestInFlight: Boolean,
+        val projectionAlive: Boolean,
+        val resourcesHealthy: Boolean,
+        val hasRequestedPermissionThisCycle: Boolean,
+        val timeoutGenerationMatches: Boolean,
+    )
+
+    fun decideFirstFrameTimeout(state: TimeoutState): TimeoutDecision {
+        if (!state.timeoutGenerationMatches) return TimeoutDecision(false, false, false)
+        if (!state.captureWanted || state.firstFrameReceived || state.recoveryRequestInFlight) {
             return TimeoutDecision(false, false, false)
         }
-        if (!projectionAlive) {
-            return TimeoutDecision(false, false, false)
-        }
-        if (hasRequestedPermissionThisCycle) {
+        if (!state.projectionAlive) return TimeoutDecision(false, false, false)
+        if (state.hasRequestedPermissionThisCycle) {
             return TimeoutDecision(true, false, false)
         }
         return TimeoutDecision(false, true, true)
     }
 
     /**
-     * A capture is healthy when it is started, has a live projection, and
-     * has produced a first frame. Returning true signals that the cycle
-     * budget should be reset for the next session.
+     * Permission-request watchdog decision. A timeout that fires for a stale
+     * permission request generation must not clear the in-flight flag of a
+     * newer request.
+     */
+    fun decidePermissionWatchdog(
+        watchdogGenerationMatches: Boolean,
+        recoveryRequestInFlight: Boolean,
+    ): Boolean {
+        return watchdogGenerationMatches && recoveryRequestInFlight
+    }
+
+    /**
+     * A capture is genuinely healthy when it is started, has a live
+     * projection, has valid video resources, and has produced a first frame.
+     * Returning true signals that the cycle budget should be reset for the
+     * next session.
      */
     fun shouldResetCycleAfterSuccess(
         isStart: Boolean,
         projectionAlive: Boolean,
+        resourcesHealthy: Boolean,
         firstFrameReceived: Boolean,
     ): Boolean {
-        return isStart && projectionAlive && firstFrameReceived
+        return isStart && projectionAlive && resourcesHealthy && firstFrameReceived
     }
 
     /**
