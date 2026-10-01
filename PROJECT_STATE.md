@@ -186,3 +186,8 @@
 - Initial exact-SHA release preparation commit `029d65b1dddbcdc4f112e0552552e59a0e25e372` completed 61/61 offline tests but Main AI review is REWORK_REQUIRED.
 - Blocking finding: the design creates the release tag from Actions with the default `GITHUB_TOKEN`. GitHub ref creation can require Workflows write when the target commit's `.github/workflows/*` differs from the default branch; current `xn-main` and `master` do have workflow-file differences. The default Actions token cannot obtain that Workflows permission.
 - Direction: Actions must not create/move the XN release tag. Redesign around a pre-existing immutable tag created by the authorized local release controller, then run the release workflow from that tag and verify exact tag/source identity before and after build.
+
+## P0-01E FIX-01 Main AI Review
+- Tag-first release implementation commit `0b82df6d2f33e8e3c5012db2c5bebc36d410a698` passed its coding-agent validation (65/65 tests, actionlint PASS), but Main AI review found one blocking authorization-drift gap before independent security review.
+- The local controller correctly rejects xn-main movement after its own source lock and before push, but `local-create` independently re-locks the latest `origin/xn-main` and is not bound to the exact SHA previously approved by Main AI/plan. If xn-main advances between approval/plan and create start, an unapproved newer SHA could be tagged and immediately trigger the release workflow.
+- Required fix: `local-create` must require an exact approved-SHA assertion and fail closed if freshly fetched `origin/xn-main` differs. The assertion is a guard only; it must never select or override the source commit.
