@@ -11,6 +11,40 @@ package com.carriez.flutter_hbb
  */
 object CaptureRecovery {
 
+    class PermissionRequest {
+        var generation = 0
+            private set
+        var inFlight = false
+            private set
+
+        fun begin(): Int? {
+            if (inFlight) return null
+            inFlight = true
+            return ++generation
+        }
+
+        fun matches(token: Int): Boolean = inFlight && token == generation
+
+        fun finish(token: Int): Boolean {
+            if (!matches(token)) return false
+            inFlight = false
+            return true
+        }
+
+        fun invalidate() {
+            ++generation
+            inFlight = false
+        }
+    }
+
+    fun canAcceptFirstFrame(generation: Int, currentGeneration: Int, deliveryEnabled: Boolean): Boolean {
+        return generation == currentGeneration && deliveryEnabled
+    }
+
+    fun canAcceptPermissionResult(request: PermissionRequest, generation: Int, captureWanted: Boolean): Boolean {
+        return captureWanted && request.matches(generation)
+    }
+
     enum class Decision {
         NONE,
         REBUILD,

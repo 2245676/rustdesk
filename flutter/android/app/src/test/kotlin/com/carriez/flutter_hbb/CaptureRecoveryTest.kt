@@ -376,6 +376,14 @@ class CaptureRecoveryTest {
     // --- F-02: generation binding for first-frame timeout ---
 
     @Test
+    fun `old generation timeout is ignored when captureWanted false`() {
+        val decision = CaptureRecovery.decideFirstFrameTimeout(
+            timeoutState(captureWanted = false, timeoutGenerationMatches = false)
+        )
+        assertEquals(false, decision.shouldRequestPermission)
+    }
+
+    @Test
     fun `stale first-frame generation timeout is ignored`() {
         // Generation 1 timeout fires after generation 2 has started.
         // The helper must return the inert TimeoutDecision so the caller
@@ -539,5 +547,132 @@ class CaptureRecoveryTest {
                 firstFrameReceived = true,
             )
         )
+    }
+
+    @Test
+    fun `generation one first frame cannot satisfy generation two`() {
+        assertFalse(CaptureRecovery.canAcceptFirstFrame(1, 2, true))
+    }
+
+    @Test
+    fun `current first frame is accepted only after delivery enable`() {
+        assertFalse(CaptureRecovery.canAcceptFirstFrame(2, 2, false))
+        assertTrue(CaptureRecovery.canAcceptFirstFrame(2, 2, true))
+    }
+
+    @Test
+    fun `stopped capture rejects current generation frame`() {
+        assertFalse(CaptureRecovery.canAcceptFirstFrame(2, 2, false))
+    }
+
+    @Test
+    fun `late frame stays rejected after stop invalidates generation`() {
+        assertFalse(CaptureRecovery.canAcceptFirstFrame(2, 3, true))
+    }
+
+    @Test
+    fun `permission begin deduplicates while result is pending`() {
+        val request = CaptureRecovery.PermissionRequest()
+        val generation = request.begin()!!
+        assertEquals(null, request.begin())
+        assertEquals(generation, request.generation)
+        assertTrue(request.inFlight)
+    }
+
+    @Test
+    fun `missing permission callback can be expired without another request`() {
+        val request = CaptureRecovery.PermissionRequest()
+        val generation = request.begin()!!
+        assertTrue(CaptureRecovery.decidePermissionWatchdog(
+            generation == request.generation, request.inFlight
+        ))
+        assertTrue(request.finish(generation))
+        request.invalidate()
+        assertFalse(request.inFlight)
+        assertEquals(CaptureRecovery.Decision.NONE, CaptureRecovery.decideEnsure(
+            healthyState(isStart = false, projectionAlive = false,
+                resourcesHealthy = false, hasRequestedPermissionThisCycle = true)
+        ))
+    }
+
+    @Test
+    fun `stale permission timeout cannot finish newer request`() {
+        val request = CaptureRecovery.PermissionRequest()
+        val oldGeneration = request.begin()!!
+        request.invalidate()
+        val currentGeneration = request.begin()!!
+        assertFalse(request.finish(oldGeneration))
+        assertTrue(request.inFlight)
+        assertTrue(request.matches(currentGeneration))
+    }
+
+    @Test
+    fun `fresh authorized connection can request again after expiry`() {
+        val request = CaptureRecovery.PermissionRequest()
+        val oldGeneration = request.begin()!!
+        assertTrue(request.finish(oldGeneration))
+        request.invalidate()
+        assertFalse(request.inFlight)
+        val currentGeneration = request.begin()!!
+        assertTrue(currentGeneration > oldGeneration)
+        assertTrue(CaptureRecovery.canAcceptPermissionResult(request, currentGeneration, true))
+    }
+
+    @Test
+    fun `late permission grant after stop cannot restart capture`() {
+        val request = CaptureRecovery.PermissionRequest()
+        val generation = request.begin()!!
+        request.invalidate()
+        assertFalse(CaptureRecovery.canAcceptPermissionResult(request, generation, false))
+        assertFalse(request.finish(generation))
+        assertFalse(request.inFlight)
+    }
+
+    @Test
+    fun `old permission grant cannot clear a new pending request`() {
+        val request = CaptureRecovery.PermissionRequest()
+        val oldGeneration = request.begin()!!
+        request.invalidate()
+        val currentGeneration = request.begin()!!
+        assertFalse(CaptureRecovery.canAcceptPermissionResult(request, oldGeneration, true))
+        assertFalse(request.finish(oldGeneration))
+        assertTrue(request.matches(currentGeneration))
+    }
+
+    @Test
+    fun `old permission denial cannot cancel a new pending request`() {
+        val request = CaptureRecovery.PermissionRequest()
+        val oldGeneration = request.begin()!!
+        request.finish(oldGeneration)
+        val currentGeneration = request.begin()!!
+        assertFalse(CaptureRecovery.canAcceptPermissionResult(request, oldGeneration, true))
+        assertTrue(request.matches(currentGeneration))
+    }
+
+    @Test
+    fun `permission grant and denial complete only their matching request once`() {
+        val request = CaptureRecovery.PermissionRequest()
+        val generation = request.begin()!!
+        assertTrue(CaptureRecovery.canAcceptPermissionResult(request, generation, true))
+        assertTrue(request.finish(generation))
+        assertFalse(request.finish(generation))
+        assertFalse(request.inFlight)
+    }
+
+    @Test
+    fun `stop prevents grant even before token invalidation`() {
+        val request = CaptureRecovery.PermissionRequest()
+        val generation = request.begin()!!
+        assertFalse(CaptureRecovery.canAcceptPermissionResult(request, generation, false))
+    }
+
+    @Test
+    fun `late timeout after permission completion is inert`() {
+        val request = CaptureRecovery.PermissionRequest()
+        val generation = request.begin()!!
+        request.finish(generation)
+        assertFalse(CaptureRecovery.decidePermissionWatchdog(
+            generation == request.generation, request.inFlight
+        ))
     }
 }
