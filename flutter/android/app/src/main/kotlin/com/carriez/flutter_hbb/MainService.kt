@@ -66,6 +66,12 @@ const val VIDEO_KEY_FRAME_RATE = 30
 // unhealthy and triggers one bounded recovery attempt.
 const val FIRST_FRAME_TIMEOUT_MS = 4000L
 
+// 15 seconds is the absolute upper limit on how long a permission result can
+// stay pending. Without this watchdog, a stuck PermissionRequestTransparentActivity
+// would wedge recoveryRequestInFlight=true forever, blocking every future
+// authorized connection.
+const val PERMISSION_RESULT_TIMEOUT_MS = 15000L
+
 class MainService : Service() {
 
     @Keep
@@ -178,6 +184,11 @@ class MainService : Service() {
                 Log.d(logTag, "from rust:stop_capture")
                 captureWanted = false
                 resetCaptureCycle()
+                // Invalidate outstanding recovery so a late watchdog or
+                // permission result cannot wedge a future authorized connection.
+                clearPermissionWatchdog()
+                permissionRequestGeneration += 1
+                recoveryRequestInFlight = false
                 stopCapture()
             }
             "half_scale" -> {
@@ -245,7 +256,9 @@ class MainService : Service() {
     @Volatile private var firstFrameReceived: Boolean = false
     @Volatile private var hasRebuiltThisCycle: Boolean = false
     @Volatile private var hasRequestedPermissionThisCycle: Boolean = false
+    @Volatile private var permissionRequestGeneration: Int = 0
     private var firstFrameTimeoutRunnable: Runnable? = null
+    private var permissionWatchdogRunnable: Runnable? = null
 
     private fun resetCaptureCycle() {
         hasRebuiltThisCycle = false
@@ -401,6 +414,14 @@ class MainService : Service() {
         if (recovery) {
             recoveryRequestInFlight = true
             hasRequestedPermissionThisCycle = true
+            permissionRequestGeneration += 1
+            val gen = permissionRequestGeneration
+            permissionWatchdogRunnable?.let { serviceHandler?.removeCallbacks(it) }
+            val watchdog = Runnable {
+                onPermissionWatchdogTimedOut(gen)
+            }
+            permissionWatchdogRunnable = watchdog
+            serviceHandler?.postDelayed(watchdog, PERMISSION_RESULT_TIMEOUT_MS)
         }
         val intent = Intent(this, PermissionRequestTransparentActivity::class.java).apply {
             action = ACT_REQUEST_MEDIA_PROJECTION
@@ -412,16 +433,46 @@ class MainService : Service() {
         startActivity(intent)
     }
 
-    @Synchronized
-    private fun cancelMediaProjectionRecovery() {
-        Log.d("XN_CAPTURE_RECOVERY", "permission_denied")
+    private fun clearPermissionWatchdog() {
+        permissionWatchdogRunnable?.let {
+            serviceHandler?.removeCallbacks(it)
+            permissionWatchdogRunnable = null
+        }
+    }
+
+    private fun onPermissionWatchdogTimedOut(gen: Int) {
+        if (!CaptureRecovery.decidePermissionWatchdog(
+                watchdogGenerationMatches = gen == permissionRequestGeneration,
+                recoveryRequestInFlight = recoveryRequestInFlight,
+            )
+        ) {
+            Log.d(
+                "XN_CAPTURE_RECOVERY",
+                "stale_permission_timeout_ignored gen=$gen current=$permissionRequestGeneration"
+            )
+            return
+        }
+        Log.w("XN_CAPTURE_RECOVERY", "permission_timeout gen=$gen")
+        permissionWatchdogRunnable = null
+        resetRecoveryLifecycleAfterFailure()
+    }
+
+    private fun resetRecoveryLifecycleAfterFailure() {
         captureRestartPending = false
         captureRestartInVoiceCall = false
         recoveryRequestInFlight = false
-        // Clear stale capture lifecycle so the UI does not get pinned to a
-        // "waiting for image" condition the projection may now never satisfy.
+        FFI.setFrameRawEnable("video", false)
         _isStart = false
         _isReady = false
+        cancelFirstFrameTimeout()
+        checkMediaPermission()
+    }
+
+    @Synchronized
+    private fun cancelMediaProjectionRecovery() {
+        Log.d("XN_CAPTURE_RECOVERY", "permission_denied")
+        clearPermissionWatchdog()
+        resetRecoveryLifecycleAfterFailure()
         // CaptureWanted is preserved: a future new authorized connection
         // may reset the cycle and try again.
     }
@@ -449,7 +500,7 @@ class MainService : Service() {
                                 val buffer = planes[0].buffer
                                 buffer.rewind()
                                 FFI.onVideoFrameUpdate(buffer)
-                                onFirstFrameReceived()
+                                onFirstFrameReceived(captureGeneration)
                             }
                         } catch (ignored: java.lang.Exception) {
                         }
@@ -460,6 +511,20 @@ class MainService : Service() {
         }
     }
 
+    /**
+     * Derive real capture-pipeline health from current [MainService]
+     * resources. Used by [CaptureRecovery.State.resourcesHealthy]. The
+     * state of this method MUST be derived from the live fields, never
+     * from a duplicate boolean that can itself drift.
+     */
+    private fun resourcesHealthy(): Boolean {
+        val reader = imageReader ?: return false
+        if (reader.surface?.isValid != true) return false
+        if (virtualDisplay == null) return false
+        if (useVP9 && videoEncoder == null) return false
+        return true
+    }
+
     @Synchronized
     private fun ensureCaptureAvailable(reason: String) {
         val state = CaptureRecovery.State(
@@ -467,6 +532,7 @@ class MainService : Service() {
             recoveryRequestInFlight = recoveryRequestInFlight,
             isStart = _isStart,
             projectionAlive = mediaProjection != null,
+            resourcesHealthy = resourcesHealthy(),
             hasRebuiltThisCycle = hasRebuiltThisCycle,
             hasRequestedPermissionThisCycle = hasRequestedPermissionThisCycle,
         )
@@ -475,6 +541,7 @@ class MainService : Service() {
                 if (CaptureRecovery.shouldResetCycleAfterSuccess(
                         _isStart,
                         mediaProjection != null,
+                        resourcesHealthy(),
                         firstFrameReceived,
                     )
                 ) {
@@ -483,6 +550,15 @@ class MainService : Service() {
             }
             CaptureRecovery.Decision.REBUILD -> {
                 hasRebuiltThisCycle = true
+                // If _isStart is stale (resources invalid), startCapture()
+                // would short-circuit on the `if (isStart) return true`
+                // guard and never rebuild. Tear down the stale pipeline
+                // first so the subsequent startCapture actually constructs
+                // fresh video resources.
+                if (_isStart && !state.resourcesHealthy) {
+                    Log.d("XN_CAPTURE_RECOVERY", "stale_resources_teardown reason=$reason")
+                    stopCapture()
+                }
                 Log.d("XN_CAPTURE_RECOVERY", "stale_capture_detected reason=$reason")
                 if (!startCapture()) {
                     // Rebuild attempt failed (e.g., VirtualDisplay creation
@@ -511,22 +587,32 @@ class MainService : Service() {
     }
 
     private fun onCaptureStarted() {
-        val gen = captureGeneration + 1
-        captureGeneration = gen
+        val gen = ++captureGeneration
         firstFrameReceived = false
         Log.d("XN_CAPTURE_RECOVERY", "capture_started gen=$gen")
         firstFrameTimeoutRunnable?.let { serviceHandler?.removeCallbacks(it) }
         val timeoutRunnable = Runnable {
-            onFirstFrameTimeout()
+            onFirstFrameTimeout(gen)
         }
         firstFrameTimeoutRunnable = timeoutRunnable
         serviceHandler?.postDelayed(timeoutRunnable, FIRST_FRAME_TIMEOUT_MS)
     }
 
-    private fun onFirstFrameReceived() {
+    private fun cancelFirstFrameTimeout() {
+        firstFrameTimeoutRunnable?.let {
+            serviceHandler?.removeCallbacks(it)
+            firstFrameTimeoutRunnable = null
+        }
+        firstFrameReceived = false
+    }
+
+    private fun onFirstFrameReceived(gen: Int) {
+        if (gen != captureGeneration) {
+            Log.d("XN_CAPTURE_RECOVERY", "stale_frame_ignored gen=$gen current=$captureGeneration")
+            return
+        }
         if (firstFrameReceived) return
         firstFrameReceived = true
-        val gen = captureGeneration
         Log.d("XN_CAPTURE_RECOVERY", "first_frame gen=$gen")
         firstFrameTimeoutRunnable?.let {
             serviceHandler?.removeCallbacks(it)
@@ -535,6 +621,7 @@ class MainService : Service() {
         if (CaptureRecovery.shouldResetCycleAfterSuccess(
                 _isStart,
                 mediaProjection != null,
+                resourcesHealthy(),
                 firstFrameReceived,
             )
         ) {
@@ -542,14 +629,24 @@ class MainService : Service() {
         }
     }
 
-    private fun onFirstFrameTimeout() {
-        val decision = CaptureRecovery.decideFirstFrameTimeout(
+    private fun onFirstFrameTimeout(gen: Int) {
+        if (gen != captureGeneration) {
+            Log.d(
+                "XN_CAPTURE_RECOVERY",
+                "stale_first_frame_timeout_ignored gen=$gen current=$captureGeneration"
+            )
+            return
+        }
+        val state = CaptureRecovery.TimeoutState(
             captureWanted = captureWanted,
             firstFrameReceived = firstFrameReceived,
             recoveryRequestInFlight = recoveryRequestInFlight,
             projectionAlive = mediaProjection != null,
+            resourcesHealthy = resourcesHealthy(),
             hasRequestedPermissionThisCycle = hasRequestedPermissionThisCycle,
+            timeoutGenerationMatches = true,
         )
+        val decision = CaptureRecovery.decideFirstFrameTimeout(state)
         if (!decision.shouldMarkRecoveryFailed &&
             !decision.shouldReleaseProjection &&
             !decision.shouldRequestPermission
@@ -658,6 +755,7 @@ class MainService : Service() {
         projection.registerCallback(callback, Handler(Looper.getMainLooper()))
         mediaProjection = projection
         mediaProjectionCallback = callback
+        clearPermissionWatchdog()
         recoveryRequestInFlight = false
         _isReady = true
         checkMediaPermission()
@@ -774,9 +872,15 @@ class MainService : Service() {
         }
         captureRestartInVoiceCall = false
         checkMediaPermission()
+        // Enable Rust raw-frame acceptance BEFORE flipping _isStart, so any
+        // frame the ImageReader releases while isStart=true is guaranteed to
+        // be delivered to the Rust side. A late enable would otherwise let
+        // the listener call FFI.onVideoFrameUpdate before the consumer is
+        // ready, dropping the first delivered frame and corrupting the
+        // first-frame health gate.
+        FFI.setFrameRawEnable("video", true)
         _isStart = true
         onCaptureStarted()
-        FFI.setFrameRawEnable("video",true)
         MainActivity.rdClipboardManager?.setCaptureStarted(_isStart)
         return true
     }
@@ -799,13 +903,16 @@ class MainService : Service() {
         Log.d(logTag, "Stop Capture")
         captureRestartPending = false
         captureRestartInVoiceCall = false
-        FFI.setFrameRawEnable("video",false)
-        _isStart = false
+        // Bump the capture generation so any in-flight first-frame timeout
+        // for the previous capture no-ops when it eventually fires.
+        captureGeneration += 1
         firstFrameReceived = false
         firstFrameTimeoutRunnable?.let {
             serviceHandler?.removeCallbacks(it)
             firstFrameTimeoutRunnable = null
         }
+        FFI.setFrameRawEnable("video",false)
+        _isStart = false
         MainActivity.rdClipboardManager?.setCaptureStarted(_isStart)
         // release video
         if (reuseVirtualDisplay) {
@@ -832,6 +939,7 @@ class MainService : Service() {
         // suface needs to be release after `imageReader.close()` to imageReader access released surface
         // https://github.com/rustdesk/rustdesk/issues/4118#issuecomment-1515666629
         surface?.release()
+        surface = null
 
         // release audio
         stopMicrophoneCapture {
