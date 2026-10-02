@@ -101,7 +101,8 @@ android {
 
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
-        applicationId "com.carriez.flutter_hbb.custom"
+        applicationId "com.carriez.flutter_hbb.xncoexist"
+        manifestPlaceholders = [appLabel: "RustDesk XN Test", appDeepLinkScheme: "rustdesk-xncoexist"]
         minSdkVersion 22
         targetSdkVersion 36
         versionCode flutterVersionCode.toInteger()
