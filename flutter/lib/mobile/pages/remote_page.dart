@@ -24,6 +24,8 @@ import '../../models/platform_model.dart';
 import '../../utils/image.dart';
 import '../widgets/dialog.dart';
 import '../widgets/custom_scale_widget.dart';
+import '../widgets/custom_shortcuts.dart';
+import '../widgets/custom_shortcuts_settings.dart';
 
 final initText = '1' * 1024;
 
@@ -66,6 +68,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   Orientation? _currentOrientation;
   final _uniqueKey = UniqueKey();
   Timer? _iosKeyboardWorkaroundTimer;
+  List<CustomShortcut> _customShortcuts = [];
 
   final _blockableOverlayState = BlockableOverlayState();
 
@@ -93,6 +96,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    _customShortcuts = CustomShortcutStore.load();
     gFFI.ffiModel.updateEventListener(sessionId, widget.id);
     gFFI.start(
       widget.id,
@@ -175,7 +179,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     // `on_voice_call_closed` should be called when the connection is ended.
     // The inner logic of `on_voice_call_closed` will check if the voice call is active.
     // Only one client is considered here for now.
-    gFFI.chatModel.onVoiceCallClosed("End connetion");
+    gFFI.chatModel.onVoiceCallClosed("End connection");
   }
 
   @override
@@ -239,6 +243,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
       );
 
   void onSoftKeyboardChanged(bool visible) {
+    if (customShortcutSettingsOpen.value) return;
     if (!visible) {
       SystemChrome.setEnabledSystemUIMode(SystemUiMode.manual, overlays: []);
       // [pi.version.isNotEmpty] -> check ready or not, avoid login without soft-keyboard
@@ -435,7 +440,10 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   Widget _bottomWidget() => _showGestureHelp
       ? getGestureHelp()
-      : (_showBar && gFFI.ffiModel.pi.displays.isNotEmpty
+      : (_showBar &&
+              !(keyboardVisibilityController.isVisible &&
+                  CustomShortcutStore.hideKeyboardToolbar) &&
+              gFFI.ffiModel.pi.displays.isNotEmpty
           ? getBottomAppBar()
           : Offstage());
 
@@ -555,98 +563,159 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     return BottomAppBar(
       elevation: 10,
       color: MyTheme.accent,
-      child: Row(
-        mainAxisSize: MainAxisSize.max,
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-        children: <Widget>[
-          Row(
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                    IconButton(
+                Row(
+                    children: <Widget>[
+                          IconButton(
+                            color: Colors.white,
+                            icon: Icon(Icons.clear),
+                            onPressed: () {
+                              clientClose(sessionId, gFFI);
+                            },
+                          ),
+                          IconButton(
+                            color: Colors.white,
+                            icon: Icon(Icons.tv),
+                            onPressed: () {
+                              setState(() => _showEdit = false);
+                              showOptions(
+                                  context, widget.id, gFFI.dialogManager);
+                            },
+                          )
+                        ] +
+                        (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard
+                            ? []
+                            : gFFI.ffiModel.isPeerAndroid
+                                ? [
+                                    IconButton(
+                                        color: Colors.white,
+                                        icon: Icon(Icons.keyboard),
+                                        onPressed: openKeyboard),
+                                    IconButton(
+                                      color: Colors.white,
+                                      icon: const Icon(Icons.build),
+                                      onPressed: () => gFFI.dialogManager
+                                          .toggleMobileActionsOverlay(
+                                              ffi: gFFI),
+                                    )
+                                  ]
+                                : [
+                                    IconButton(
+                                        color: Colors.white,
+                                        icon: Icon(Icons.keyboard),
+                                        onPressed: openKeyboard),
+                                    IconButton(
+                                      color: Colors.white,
+                                      icon: Icon(gFFI.ffiModel.touchMode
+                                          ? Icons.touch_app
+                                          : Icons.mouse),
+                                      onPressed: () => setState(() =>
+                                          _showGestureHelp = !_showGestureHelp),
+                                    ),
+                                  ]) +
+                        (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard
+                            ? []
+                            : [_customShortcutSettingsButton()]) +
+                        (CustomShortcutStore.twoRows
+                            ? []
+                            : _quickNavigationButtons(ffiModel)) +
+                        (!CustomShortcutStore.showChat || isWeb
+                            ? []
+                            : <Widget>[
+                                futureBuilder(
+                                    future: gFFI.invokeMethod("get_value",
+                                        "KEY_IS_SUPPORT_VOICE_CALL"),
+                                    hasData: (isSupportVoiceCall) => IconButton(
+                                          color: Colors.white,
+                                          icon: isAndroid && isSupportVoiceCall
+                                              ? SvgPicture.asset(
+                                                  'assets/chat.svg',
+                                                  colorFilter: ColorFilter.mode(
+                                                      Colors.white,
+                                                      BlendMode.srcIn))
+                                              : Icon(Icons.message),
+                                          onPressed: () => isAndroid &&
+                                                  isSupportVoiceCall
+                                              ? showChatOptions(widget.id)
+                                              : onPressedTextChat(widget.id),
+                                        ))
+                              ]) +
+                        [
+                          IconButton(
+                            color: Colors.white,
+                            icon: Icon(Icons.more_vert),
+                            onPressed: () {
+                              setState(() => _showEdit = false);
+                              showActions(widget.id);
+                            },
+                          ),
+                        ]),
+                Obx(() => IconButton(
                       color: Colors.white,
-                      icon: Icon(Icons.clear),
-                      onPressed: () {
-                        clientClose(sessionId, gFFI);
-                      },
-                    ),
-                    IconButton(
-                      color: Colors.white,
-                      icon: Icon(Icons.tv),
-                      onPressed: () {
-                        setState(() => _showEdit = false);
-                        showOptions(context, widget.id, gFFI.dialogManager);
-                      },
-                    )
-                  ] +
-                  (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard
-                      ? []
-                      : gFFI.ffiModel.isPeerAndroid
-                          ? [
-                              IconButton(
-                                  color: Colors.white,
-                                  icon: Icon(Icons.keyboard),
-                                  onPressed: openKeyboard),
-                              IconButton(
-                                color: Colors.white,
-                                icon: const Icon(Icons.build),
-                                onPressed: () => gFFI.dialogManager
-                                    .toggleMobileActionsOverlay(ffi: gFFI),
-                              )
-                            ]
-                          : [
-                              IconButton(
-                                  color: Colors.white,
-                                  icon: Icon(Icons.keyboard),
-                                  onPressed: openKeyboard),
-                              IconButton(
-                                color: Colors.white,
-                                icon: Icon(gFFI.ffiModel.touchMode
-                                    ? Icons.touch_app
-                                    : Icons.mouse),
-                                onPressed: () => setState(
-                                    () => _showGestureHelp = !_showGestureHelp),
-                              ),
-                            ]) +
-                  (isWeb
-                      ? []
-                      : <Widget>[
-                          futureBuilder(
-                              future: gFFI.invokeMethod(
-                                  "get_value", "KEY_IS_SUPPORT_VOICE_CALL"),
-                              hasData: (isSupportVoiceCall) => IconButton(
-                                    color: Colors.white,
-                                    icon: isAndroid && isSupportVoiceCall
-                                        ? SvgPicture.asset('assets/chat.svg',
-                                            colorFilter: ColorFilter.mode(
-                                                Colors.white, BlendMode.srcIn))
-                                        : Icon(Icons.message),
-                                    onPressed: () =>
-                                        isAndroid && isSupportVoiceCall
-                                            ? showChatOptions(widget.id)
-                                            : onPressedTextChat(widget.id),
-                                  ))
-                        ]) +
-                  [
-                    IconButton(
-                      color: Colors.white,
-                      icon: Icon(Icons.more_vert),
-                      onPressed: () {
-                        setState(() => _showEdit = false);
-                        showActions(widget.id);
-                      },
-                    ),
-                  ]),
-          Obx(() => IconButton(
-                color: Colors.white,
-                icon: Icon(Icons.expand_more),
-                onPressed: gFFI.ffiModel.waitForFirstImage.isTrue
-                    ? null
-                    : () {
-                        setState(() => _showBar = !_showBar);
-                      },
-              )),
+                      icon: Icon(Icons.expand_more),
+                      onPressed: gFFI.ffiModel.waitForFirstImage.isTrue
+                          ? null
+                          : () {
+                              setState(() => _showBar = !_showBar);
+                            },
+                    )),
+              ],
+            ),
+          ),
+          if (CustomShortcutStore.twoRows)
+            SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(children: _quickNavigationButtons(ffiModel)),
+            ),
         ],
       ),
     );
+  }
+
+  Widget _customShortcutSettingsButton() => IconButton(
+        color: Colors.white,
+        icon: const Icon(Icons.tune),
+        tooltip: '自定义快捷键',
+        onPressed: () async {
+          final shortcuts = await Navigator.push<List<CustomShortcut>>(
+            context,
+            MaterialPageRoute(
+              builder: (_) => CustomShortcutSettingsPage(
+                shortcuts: _customShortcuts,
+              ),
+            ),
+          );
+          if (shortcuts != null && mounted) {
+            setState(() => _customShortcuts = shortcuts);
+          }
+        },
+      );
+
+  List<Widget> _quickNavigationButtons(FfiModel ffiModel) {
+    if (isWebDesktop || ffiModel.viewOnly || !ffiModel.keyboard) return [];
+
+    final customButtons = _customShortcuts
+        .where((shortcut) => shortcut.visible)
+        .map((shortcut) => Tooltip(
+              message: shortcut.name,
+              child: IconButton(
+                color: Colors.white,
+                icon: Icon(customShortcutIcon(shortcut.icon)),
+                onPressed: () => runCustomShortcut(gFFI.inputModel, shortcut),
+              ),
+            ));
+
+    return [
+      const SizedBox(width: 4),
+      ...customButtons,
+    ];
   }
 
   bool get showCursorPaint =>
@@ -668,7 +737,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
             ),
             KeyHelpTools(
                 keyboardIsVisible: keyboardIsVisible,
-                showGestureHelp: _showGestureHelp),
+                showGestureHelp: _showGestureHelp,
+                visible: !(keyboardIsVisible &&
+                    CustomShortcutStore.hideKeyboardTaskBar)),
             SizedBox(
               width: 0,
               height: 0,
@@ -919,11 +990,17 @@ class KeyHelpTools extends StatefulWidget {
   final bool keyboardIsVisible;
   final bool showGestureHelp;
 
+  /// Allow callers (e.g. the mobile bottom toolbar) to suppress the top key
+  /// help row entirely (for example, while the soft keyboard is open).
+  final bool visible;
+
   /// need to show by external request, etc [keyboardIsVisible] or [changeTouchMode]
   bool get requestShow => keyboardIsVisible || showGestureHelp;
 
   KeyHelpTools(
-      {required this.keyboardIsVisible, required this.showGestureHelp});
+      {required this.keyboardIsVisible,
+      required this.showGestureHelp,
+      this.visible = true});
 
   @override
   State<KeyHelpTools> createState() => _KeyHelpToolsState();
@@ -980,7 +1057,7 @@ class _KeyHelpToolsState extends State<KeyHelpTools> {
         inputModel.shift ||
         inputModel.command;
 
-    if (!_pin && !hasModifierOn && !widget.requestShow) {
+    if (!widget.visible || (!_pin && !hasModifierOn && !widget.requestShow)) {
       gFFI.cursorModel
           .keyHelpToolsVisibilityChanged(null, widget.keyboardIsVisible);
       return Offstage();

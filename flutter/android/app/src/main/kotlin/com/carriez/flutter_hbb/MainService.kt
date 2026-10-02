@@ -17,6 +17,7 @@ import android.app.PendingIntent.FLAG_UPDATE_CURRENT
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.content.res.Configuration
 import android.content.res.Configuration.ORIENTATION_LANDSCAPE
 import android.graphics.Color
@@ -59,6 +60,17 @@ const val MAX_SCREEN_SIZE = 1200
 
 const val VIDEO_KEY_BIT_RATE = 1024_000
 const val VIDEO_KEY_FRAME_RATE = 30
+
+// 4 seconds is generous for the first frame on a healthy capture pipeline.
+// A capture that fails to produce a frame in this window is treated as
+// unhealthy and triggers one bounded recovery attempt.
+const val FIRST_FRAME_TIMEOUT_MS = 4000L
+
+// 15 seconds is the absolute upper limit on how long a permission result can
+// stay pending. Without this watchdog, a stuck PermissionRequestTransparentActivity
+// would wedge recoveryRequestInFlight=true forever, blocking every future
+// authorized connection.
+const val PERMISSION_RESULT_TIMEOUT_MS = 15000L
 
 class MainService : Service() {
 
@@ -127,8 +139,9 @@ class MainService : Service() {
                         translate("Share screen")
                     }
                     if (authorized) {
-                        if (!isFileTransfer && !isStart) {
-                            startCapture()
+                        if (!isFileTransfer) {
+                            Log.d("XN_CAPTURE_RECOVERY", "authorized_connection id=$id")
+                            onAuthorizedCaptureConnection()
                         }
                         onClientAuthorizedNotification(id, type, username, peerId)
                     } else {
@@ -150,21 +163,15 @@ class MainService : Service() {
                         if (incomingVoiceCall) {
                             voiceCallRequestNotification(id, "Voice Call Request", username, peerId)
                         } else {
-                            if (!audioRecordHandle.switchOutVoiceCall(mediaProjection)) {
+                            if (!switchOutVoiceCall()) {
                                 Log.e(logTag, "switchOutVoiceCall fail")
-                                MainActivity.flutterMethodChannel?.invokeMethod("msgbox", mapOf(
-                                    "type" to "custom-nook-nocancel-hasclose-error",
-                                    "title" to "Voice call",
-                                    "text" to "Failed to switch out voice call."))
+                                showVoiceCallError("Failed to switch out voice call.")
                             }
                         }
                     } else {
-                        if (!audioRecordHandle.switchToVoiceCall(mediaProjection)) {
+                        if (!switchToVoiceCall()) {
                             Log.e(logTag, "switchToVoiceCall fail")
-                            MainActivity.flutterMethodChannel?.invokeMethod("msgbox", mapOf(
-                                "type" to "custom-nook-nocancel-hasclose-error",
-                                "title" to "Voice call",
-                                "text" to "Failed to switch to voice call."))
+                            showVoiceCallError(audioRecordHandle.getVoiceCallStartError())
                         }
                     }
                 } catch (e: JSONException) {
@@ -173,7 +180,7 @@ class MainService : Service() {
             }
             "stop_capture" -> {
                 Log.d(logTag, "from rust:stop_capture")
-                stopCapture()
+                stopRequestedCapture()
             }
             "half_scale" -> {
                 val halfScale = arg1.toBoolean()
@@ -214,11 +221,49 @@ class MainService : Service() {
 
     // video
     private var mediaProjection: MediaProjection? = null
+    private var mediaProjectionCallback: MediaProjection.Callback? = null
+    private var captureRestartPending = false
+    private var captureRestartInVoiceCall = false
+    private var mediaProjectionForegroundService = false
+    private var microphoneForegroundService = false
     private var surface: Surface? = null
     private val sendVP9Thread = Executors.newSingleThreadExecutor()
     private var videoEncoder: MediaCodec? = null
     private var imageReader: ImageReader? = null
     private var virtualDisplay: VirtualDisplay? = null
+
+    // capture recovery state — see CaptureRecovery.kt for the decision logic
+    @Volatile private var captureWanted: Boolean = false
+    private val recoveryPermission = CaptureRecovery.PermissionRequest()
+    private val recoveryRequestInFlight: Boolean get() = recoveryPermission.inFlight
+    @Volatile private var captureGeneration: Int = 0
+    @Volatile private var firstFrameReceived: Boolean = false
+    @Volatile private var hasRebuiltThisCycle: Boolean = false
+    @Volatile private var hasRequestedPermissionThisCycle: Boolean = false
+    private val permissionRequestGeneration: Int get() = recoveryPermission.generation
+    private var firstFrameTimeoutRunnable: Runnable? = null
+    private var permissionWatchdogRunnable: Runnable? = null
+
+    private fun resetCaptureCycle() {
+        hasRebuiltThisCycle = false
+        hasRequestedPermissionThisCycle = false
+    }
+
+    @Synchronized
+    private fun onAuthorizedCaptureConnection() {
+        captureWanted = true
+        if (!recoveryRequestInFlight) resetCaptureCycle()
+        ensureCaptureAvailable("authorized_connection")
+    }
+
+    @Synchronized
+    private fun stopRequestedCapture() {
+        captureWanted = false
+        clearPermissionWatchdog()
+        recoveryPermission.invalidate()
+        resetCaptureCycle()
+        stopCapture()
+    }
 
     // audio
     private val audioRecordHandle = AudioRecordHandle(this, { isStart }, { isAudioStart })
@@ -243,7 +288,9 @@ class MainService : Service() {
         // keep the config dir same with flutter
         val prefs = applicationContext.getSharedPreferences(KEY_SHARED_PREFERENCES, FlutterActivity.MODE_PRIVATE)
         val configPath = prefs.getString(KEY_APP_DIR_CONFIG_PATH, "") ?: ""
-        FFI.startServer(configPath, "")
+        val homePath = applicationContext.getExternalFilesDir(null)?.absolutePath
+            ?: applicationContext.filesDir.absolutePath
+        FFI.startServer(configPath, homePath, "")
 
         createForegroundNotification()
     }
@@ -337,8 +384,6 @@ class MainService : Service() {
         Log.d("whichService", "this service: ${Thread.currentThread()}")
         super.onStartCommand(intent, flags, startId)
         if (intent?.action == ACT_INIT_MEDIA_PROJECTION_AND_SERVICE) {
-            createForegroundNotification()
-
             if (intent.getBooleanExtra(EXT_INIT_FROM_BOOT, false)) {
                 FFI.startService()
             }
@@ -347,10 +392,14 @@ class MainService : Service() {
                 getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
 
             intent.getParcelableExtra<Intent>(EXT_MEDIA_PROJECTION_RES_INTENT)?.let {
-                mediaProjection =
-                    mediaProjectionManager.getMediaProjection(Activity.RESULT_OK, it)
-                checkMediaPermission()
-                _isReady = true
+                val receiver = intent.getParcelableExtra<ResultReceiver>(EXT_MEDIA_PROJECTION_RESULT_RECEIVER)
+                if (receiver != null) {
+                    receiver.send(Activity.RESULT_OK, Bundle().apply {
+                        putParcelable(EXT_MEDIA_PROJECTION_RES_INTENT, it)
+                    })
+                } else {
+                    replaceMediaProjection(mediaProjectionManager, it)
+                }
             } ?: let {
                 Log.d(logTag, "getParcelableExtra intent null, invoke requestMediaProjection")
                 requestMediaProjection()
@@ -364,16 +413,109 @@ class MainService : Service() {
         updateScreenInfo(newConfig.orientation)
     }
 
-    private fun requestMediaProjection() {
+    @Synchronized
+    private fun requestMediaProjection(recovery: Boolean = false) {
+        if (recovery && recoveryRequestInFlight) {
+            Log.d("XN_CAPTURE_RECOVERY", "permission_dedup")
+            return
+        }
+        var receiver: ResultReceiver? = null
+        if (recovery) {
+            if (!captureWanted || hasRequestedPermissionThisCycle) return
+            val gen = recoveryPermission.begin() ?: return
+            hasRequestedPermissionThisCycle = true
+            receiver = object : ResultReceiver(Handler(Looper.getMainLooper())) {
+                override fun onReceiveResult(resultCode: Int, resultData: Bundle?) {
+                    onRecoveryPermissionResult(gen, resultCode, resultData)
+                }
+            }
+            permissionWatchdogRunnable?.let { serviceHandler?.removeCallbacks(it) }
+            val watchdog = Runnable {
+                onPermissionWatchdogTimedOut(gen)
+            }
+            permissionWatchdogRunnable = watchdog
+            serviceHandler?.postDelayed(watchdog, PERMISSION_RESULT_TIMEOUT_MS)
+        }
         val intent = Intent(this, PermissionRequestTransparentActivity::class.java).apply {
             action = ACT_REQUEST_MEDIA_PROJECTION
             flags = Intent.FLAG_ACTIVITY_NEW_TASK
+            if (recovery) {
+                putExtra(EXT_MEDIA_PROJECTION_RESULT_RECEIVER, receiver)
+            }
         }
-        startActivity(intent)
+        try {
+            startActivity(intent)
+        } catch (e: Exception) {
+            if (!recovery) throw e
+            Log.w("XN_CAPTURE_RECOVERY", "permission_launch_failed", e)
+            cancelMediaProjectionRecovery()
+        }
+    }
+
+    @Synchronized
+    private fun onRecoveryPermissionResult(gen: Int, resultCode: Int, resultData: Bundle?) {
+        if (!CaptureRecovery.canAcceptPermissionResult(recoveryPermission, gen, captureWanted)) {
+            Log.d("XN_CAPTURE_RECOVERY", "stale_permission_result_ignored gen=$gen")
+            return
+        }
+        recoveryPermission.finish(gen)
+        clearPermissionWatchdog()
+        val resultIntent = resultData?.getParcelable<Intent>(EXT_MEDIA_PROJECTION_RES_INTENT)
+        if (resultCode != Activity.RESULT_OK || resultIntent == null) {
+            cancelMediaProjectionRecovery()
+            return
+        }
+        val manager = getSystemService(MEDIA_PROJECTION_SERVICE) as MediaProjectionManager
+        replaceMediaProjection(manager, resultIntent)
+    }
+
+    private fun clearPermissionWatchdog() {
+        permissionWatchdogRunnable?.let {
+            serviceHandler?.removeCallbacks(it)
+            permissionWatchdogRunnable = null
+        }
+    }
+
+    @Synchronized
+    private fun onPermissionWatchdogTimedOut(gen: Int) {
+        if (!CaptureRecovery.decidePermissionWatchdog(
+                watchdogGenerationMatches = gen == permissionRequestGeneration,
+                recoveryRequestInFlight = recoveryRequestInFlight,
+            )
+        ) {
+            Log.d(
+                "XN_CAPTURE_RECOVERY",
+                "stale_permission_timeout_ignored gen=$gen current=$permissionRequestGeneration"
+            )
+            return
+        }
+        Log.w("XN_CAPTURE_RECOVERY", "permission_timeout gen=$gen")
+        recoveryPermission.finish(gen)
+        resetRecoveryLifecycleAfterFailure()
+    }
+
+    private fun resetRecoveryLifecycleAfterFailure() {
+        clearPermissionWatchdog()
+        recoveryPermission.invalidate()
+        stopCapture()
+        releaseCaptureDisplay()
+        releaseMediaProjection()
+        setMediaProjectionForegroundService(false)
+        _isReady = false
+        checkMediaPermission()
+    }
+
+    @Synchronized
+    private fun cancelMediaProjectionRecovery() {
+        Log.d("XN_CAPTURE_RECOVERY", "permission_denied")
+        clearPermissionWatchdog()
+        resetRecoveryLifecycleAfterFailure()
+        // CaptureWanted is preserved: a future new authorized connection
+        // may reset the cycle and try again.
     }
 
     @SuppressLint("WrongConstant")
-    private fun createSurface(): Surface? {
+    private fun createSurface(generation: Int): Surface? {
         return if (useVP9) {
             // TODO
             null
@@ -386,15 +528,26 @@ class MainService : Service() {
                     PixelFormat.RGBA_8888,
                     4
                 ).apply {
+                    var staleFrameReported = false
                     setOnImageAvailableListener({ imageReader: ImageReader ->
                         try {
                             // If not call acquireLatestImage, listener will not be called again
                             imageReader.acquireLatestImage().use { image ->
-                                if (image == null || !isStart) return@setOnImageAvailableListener
-                                val planes = image.planes
-                                val buffer = planes[0].buffer
-                                buffer.rewind()
-                                FFI.onVideoFrameUpdate(buffer)
+                                if (image == null) return@setOnImageAvailableListener
+                                synchronized(this@MainService) {
+                                    if (generation != captureGeneration) {
+                                        if (!staleFrameReported) {
+                                            onFirstFrameReceived(generation)
+                                            staleFrameReported = true
+                                        }
+                                        return@setOnImageAvailableListener
+                                    }
+                                    if (!isStart) return@setOnImageAvailableListener
+                                    val buffer = image.planes[0].buffer
+                                    buffer.rewind()
+                                    FFI.onVideoFrameUpdate(buffer)
+                                    onFirstFrameReceived(generation)
+                                }
                             }
                         } catch (ignored: java.lang.Exception) {
                         }
@@ -405,51 +558,458 @@ class MainService : Service() {
         }
     }
 
-    fun onVoiceCallStarted(): Boolean {
-        return audioRecordHandle.onVoiceCallStarted(mediaProjection)
+    /**
+     * Derive real capture-pipeline health from current [MainService]
+     * resources. Used by [CaptureRecovery.State.resourcesHealthy]. The
+     * state of this method MUST be derived from the live fields, never
+     * from a duplicate boolean that can itself drift.
+     */
+    private fun resourcesHealthy(): Boolean {
+        if (mediaProjection == null || virtualDisplay == null) return false
+        val captureSurface = surface ?: return false
+        if (!captureSurface.isValid) return false
+        if (useVP9) return videoEncoder != null
+        val reader = imageReader ?: return false
+        if (reader.surface?.isValid != true) return false
+        return true
     }
 
+    @Synchronized
+    private fun ensureCaptureAvailable(reason: String) {
+        val state = CaptureRecovery.State(
+            captureWanted = captureWanted,
+            recoveryRequestInFlight = recoveryRequestInFlight,
+            isStart = _isStart,
+            projectionAlive = mediaProjection != null,
+            resourcesHealthy = resourcesHealthy(),
+            hasRebuiltThisCycle = hasRebuiltThisCycle,
+            hasRequestedPermissionThisCycle = hasRequestedPermissionThisCycle,
+        )
+        when (CaptureRecovery.decideEnsure(state)) {
+            CaptureRecovery.Decision.NONE -> {
+                if (CaptureRecovery.shouldResetCycleAfterSuccess(
+                        _isStart,
+                        mediaProjection != null,
+                        resourcesHealthy(),
+                        firstFrameReceived,
+                    )
+                ) {
+                    resetCaptureCycle()
+                }
+            }
+            CaptureRecovery.Decision.REBUILD -> {
+                hasRebuiltThisCycle = true
+                // If _isStart is stale (resources invalid), startCapture()
+                // would short-circuit on the `if (isStart) return true`
+                // guard and never rebuild. Tear down the stale pipeline
+                // first so the subsequent startCapture actually constructs
+                // fresh video resources.
+                if (_isStart) {
+                    Log.d("XN_CAPTURE_RECOVERY", "stale_resources reason=$reason")
+                    stopCapture()
+                    releaseCaptureDisplay()
+                }
+                Log.d("XN_CAPTURE_RECOVERY", "stale_capture_detected reason=$reason")
+                if (!startCapture()) {
+                    // Rebuild attempt failed (e.g., VirtualDisplay creation
+                    // raised an exception, or the surface could not be
+                    // created). Escalate to release + permission request so
+                    // the bounded cycle covers both A and B. If a permission
+                    // request was already issued in this cycle, the cycle is
+                    // exhausted and we mark recovery failed.
+                    Log.w("XN_CAPTURE_RECOVERY", "rebuild_failed reason=$reason")
+                    if (!hasRequestedPermissionThisCycle) {
+                        releaseMediaProjection()
+                        _isReady = false
+                        requestMediaProjection(true)
+                    } else {
+                        Log.w("XN_CAPTURE_RECOVERY", "recovery_failed reason=$reason")
+                    }
+                }
+            }
+            CaptureRecovery.Decision.REQUEST_PERMISSION -> {
+                stopCapture()
+                releaseCaptureDisplay()
+                Log.d("XN_CAPTURE_RECOVERY", "recovery_requested reason=$reason")
+                requestMediaProjection(true)
+            }
+        }
+    }
+
+    private fun onCaptureStarted(gen: Int) {
+        firstFrameReceived = false
+        Log.d("XN_CAPTURE_RECOVERY", "capture_started gen=$gen")
+        firstFrameTimeoutRunnable?.let { serviceHandler?.removeCallbacks(it) }
+        val timeoutRunnable = Runnable {
+            onFirstFrameTimeout(gen)
+        }
+        firstFrameTimeoutRunnable = timeoutRunnable
+        serviceHandler?.postDelayed(timeoutRunnable, FIRST_FRAME_TIMEOUT_MS)
+    }
+
+    private fun cancelFirstFrameTimeout() {
+        firstFrameTimeoutRunnable?.let {
+            serviceHandler?.removeCallbacks(it)
+            firstFrameTimeoutRunnable = null
+        }
+        firstFrameReceived = false
+    }
+
+    @Synchronized
+    private fun onFirstFrameReceived(gen: Int) {
+        if (gen != captureGeneration) {
+            Log.d("XN_CAPTURE_RECOVERY", "stale_first_frame_ignored gen=$gen current=$captureGeneration")
+            return
+        }
+        if (!CaptureRecovery.canAcceptFirstFrame(gen, captureGeneration, isStart)) return
+        if (firstFrameReceived) return
+        firstFrameReceived = true
+        Log.d("XN_CAPTURE_RECOVERY", "first_frame gen=$gen")
+        firstFrameTimeoutRunnable?.let {
+            serviceHandler?.removeCallbacks(it)
+            firstFrameTimeoutRunnable = null
+        }
+        if (CaptureRecovery.shouldResetCycleAfterSuccess(
+                _isStart,
+                mediaProjection != null,
+                resourcesHealthy(),
+                firstFrameReceived,
+            )
+        ) {
+            resetCaptureCycle()
+        }
+    }
+
+    @Synchronized
+    private fun onFirstFrameTimeout(gen: Int) {
+        if (gen != captureGeneration) {
+            Log.d(
+                "XN_CAPTURE_RECOVERY",
+                "stale_timeout_ignored gen=$gen current=$captureGeneration"
+            )
+            return
+        }
+        val state = CaptureRecovery.TimeoutState(
+            captureWanted = captureWanted,
+            firstFrameReceived = firstFrameReceived,
+            recoveryRequestInFlight = recoveryRequestInFlight,
+            projectionAlive = mediaProjection != null,
+            resourcesHealthy = resourcesHealthy(),
+            hasRequestedPermissionThisCycle = hasRequestedPermissionThisCycle,
+            timeoutGenerationMatches = true,
+        )
+        val decision = CaptureRecovery.decideFirstFrameTimeout(state)
+        if (!decision.shouldMarkRecoveryFailed &&
+            !decision.shouldReleaseProjection &&
+            !decision.shouldRequestPermission
+        ) {
+            return
+        }
+        Log.w(
+            "XN_CAPTURE_RECOVERY",
+            "first_frame_timeout gen=$captureGeneration wanted=$captureWanted"
+        )
+        stopCapture()
+        if (decision.shouldReleaseProjection) {
+            releaseMediaProjection()
+            _isReady = false
+        }
+        if (decision.shouldRequestPermission) {
+            requestMediaProjection(true)
+        } else if (decision.shouldMarkRecoveryFailed) {
+            Log.w("XN_CAPTURE_RECOVERY", "recovery_failed")
+        }
+    }
+
+    private fun releaseMediaProjection() {
+        val projection = mediaProjection
+        val callback = mediaProjectionCallback
+        mediaProjection = null
+        mediaProjectionCallback = null
+        try {
+            if (projection != null && callback != null) projection.unregisterCallback(callback)
+        } catch (e: Exception) {
+            Log.w("XN_CAPTURE_RECOVERY", "projection_callback_release_failed", e)
+        }
+        try {
+            projection?.stop()
+        } catch (e: Exception) {
+            Log.w("XN_CAPTURE_RECOVERY", "projection_release_failed", e)
+        }
+    }
+
+    @Synchronized
+    private fun handleMediaProjectionStopped(stoppedProjection: MediaProjection) {
+        if (mediaProjection !== stoppedProjection) {
+            return
+        }
+        Log.d(logTag, "MediaProjection stopped")
+        Log.d("XN_CAPTURE_RECOVERY", "projection_stopped")
+        setMediaProjectionForegroundService(false)
+        stopCapture()
+        virtualDisplay?.release()
+        virtualDisplay = null
+        mediaProjection = null
+        mediaProjectionCallback = null
+        _isReady = false
+        checkMediaPermission()
+        if (captureWanted) {
+            ensureCaptureAvailable("projection_stopped")
+        }
+    }
+
+    @Synchronized
+    private fun replaceMediaProjection(
+        mediaProjectionManager: MediaProjectionManager,
+        resultIntent: Intent,
+    ) {
+        val wasCapturing = isStart
+        val restartCapture = wasCapturing || captureRestartPending || captureWanted
+        val restartInVoiceCall = if (wasCapturing) {
+            audioRecordHandle.isVoiceCallActive()
+        } else {
+            captureRestartInVoiceCall
+        }
+        if (!setMediaProjectionForegroundService(true)) {
+            cancelMediaProjectionRecovery()
+            return
+        }
+        val projection = try {
+            mediaProjectionManager.getMediaProjection(Activity.RESULT_OK, resultIntent)
+        } catch (e: Exception) {
+            Log.w("XN_CAPTURE_RECOVERY", "permission_grant_failed", e)
+            cancelMediaProjectionRecovery()
+            return
+        }
+        if (projection == null) {
+            cancelMediaProjectionRecovery()
+            return
+        }
+        if (wasCapturing) {
+            stopCapture()
+        }
+        captureRestartPending = restartCapture
+        releaseCaptureDisplay()
+        releaseMediaProjection()
+        val callback = object : MediaProjection.Callback() {
+            override fun onStop() {
+                handleMediaProjectionStopped(projection)
+            }
+        }
+        mediaProjection = projection
+        mediaProjectionCallback = callback
+        try {
+            projection.registerCallback(callback, Handler(Looper.getMainLooper()))
+        } catch (e: Exception) {
+            Log.w("XN_CAPTURE_RECOVERY", "projection_callback_failed", e)
+            cancelMediaProjectionRecovery()
+            return
+        }
+        clearPermissionWatchdog()
+        _isReady = true
+        checkMediaPermission()
+        if (restartCapture) {
+            captureRestartPending = false
+            startCapture(restartInVoiceCall)
+        }
+    }
+
+    private fun showVoiceCallError(message: String) {
+        Handler(Looper.getMainLooper()).post {
+            MainActivity.flutterMethodChannel?.invokeMethod("msgbox", mapOf(
+                "type" to "custom-nook-nocancel-hasclose-error",
+                "title" to "Voice call",
+                "text" to message))
+        }
+    }
+
+    @Synchronized
+    private fun startMicrophoneCapture(startAudio: () -> Boolean): Boolean {
+        if (!setMicrophoneForegroundService(true)) {
+            return false
+        }
+        if (startAudio()) {
+            return true
+        }
+        setMicrophoneForegroundService(false)
+        return false
+    }
+
+    @Synchronized
+    private fun stopMicrophoneCapture(stopAudio: () -> Boolean): Boolean {
+        val stopped = stopAudio()
+        val foregroundServiceUpdated = setMicrophoneForegroundService(false)
+        return stopped && foregroundServiceUpdated
+    }
+
+    @Synchronized
+    private fun switchToVoiceCall(): Boolean {
+        if (captureRestartPending) {
+            captureRestartInVoiceCall = true
+        }
+        return startMicrophoneCapture {
+            audioRecordHandle.switchToVoiceCall(mediaProjection)
+        }
+    }
+
+    @Synchronized
+    private fun switchOutVoiceCall(): Boolean {
+        captureRestartInVoiceCall = false
+        val switched = audioRecordHandle.switchOutVoiceCall(mediaProjection)
+        val foregroundServiceUpdated = setMicrophoneForegroundService(false)
+        return switched && foregroundServiceUpdated
+    }
+
+    @Synchronized
+    fun onVoiceCallStarted(): Boolean {
+        if (captureRestartPending) {
+            captureRestartInVoiceCall = true
+        }
+        return startMicrophoneCapture {
+            audioRecordHandle.onVoiceCallStarted(mediaProjection)
+        }
+    }
+
+    @Synchronized
     fun onVoiceCallClosed(): Boolean {
-        return audioRecordHandle.onVoiceCallClosed(mediaProjection)
+        captureRestartInVoiceCall = false
+        return stopMicrophoneCapture {
+            audioRecordHandle.onVoiceCallClosed(mediaProjection)
+        }
     }
 
     fun startCapture(): Boolean {
+        return startCapture(false)
+    }
+
+    @Synchronized
+    private fun startCapture(inVoiceCall: Boolean): Boolean {
         if (isStart) {
             return true
         }
         if (mediaProjection == null) {
             Log.w(logTag, "startCapture fail,mediaProjection is null")
+            releaseFailedVideoCapture()
+            _isReady = false
+            checkMediaPermission()
             return false
         }
+        captureRestartInVoiceCall = inVoiceCall
         
         updateScreenInfo(resources.configuration.orientation)
         Log.d(logTag, "Start Capture")
-        surface = createSurface()
+        val generation = ++captureGeneration
+        cancelFirstFrameTimeout()
+        try {
+            surface = createSurface(generation)
 
-        if (useVP9) {
-            startVP9VideoRecorder(mediaProjection!!)
-        } else {
-            startRawVideoRecorder(mediaProjection!!)
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-            if (!audioRecordHandle.createAudioRecorder(false, mediaProjection)) {
-                Log.d(logTag, "createAudioRecorder fail")
+            val videoStarted = if (useVP9) {
+                startVP9VideoRecorder(mediaProjection!!)
             } else {
-                Log.d(logTag, "audio recorder start")
-                audioRecordHandle.startAudioRecorder()
+                startRawVideoRecorder(mediaProjection!!)
+            }
+            if (!videoStarted) {
+                if (!captureRestartPending) {
+                    captureRestartInVoiceCall = false
+                }
+                releaseFailedVideoCapture()
+                return false
+            }
+
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                val audioStarted = if (inVoiceCall) {
+                    switchToVoiceCall()
+                } else {
+                    audioRecordHandle.createAudioRecorder(false, mediaProjection) &&
+                            audioRecordHandle.startAudioRecorder()
+                }
+                Log.d(logTag, if (audioStarted) "audio recorder start" else "audio recorder start failed")
+            }
+            captureRestartInVoiceCall = false
+            checkMediaPermission()
+            // Enable Rust raw-frame acceptance BEFORE flipping _isStart, so any
+            // frame the ImageReader releases while isStart=true is guaranteed to
+            // be delivered to the Rust side. A late enable would otherwise let
+            // the listener call FFI.onVideoFrameUpdate before the consumer is
+            // ready, dropping the first delivered frame and corrupting the
+            // first-frame health gate.
+            FFI.setFrameRawEnable("video", true)
+            _isStart = true
+            onCaptureStarted(generation)
+            MainActivity.rdClipboardManager?.setCaptureStarted(_isStart)
+            return true
+        } catch (e: Exception) {
+            Log.w("XN_CAPTURE_RECOVERY", "capture_start_failed", e)
+            releaseFailedVideoCapture()
+            _isReady = false
+            checkMediaPermission()
+            return false
+        }
+    }
+
+    private fun releaseFailedVideoCapture() {
+        FFI.setFrameRawEnable("video", false)
+        _isStart = false
+        ++captureGeneration
+        cancelFirstFrameTimeout()
+        releaseCaptureDisplay()
+        releaseVideoResources()
+        MainActivity.rdClipboardManager?.setCaptureStarted(false)
+    }
+
+    private fun releaseCaptureDisplay() {
+        val display = virtualDisplay
+        virtualDisplay = null
+        try {
+            display?.release()
+        } catch (e: Exception) {
+            Log.w("XN_CAPTURE_RECOVERY", "display_release_failed", e)
+        }
+    }
+
+    private fun releaseVideoResources() {
+        val reader = imageReader
+        imageReader = null
+        try {
+            reader?.close()
+        } catch (e: Exception) {
+            Log.w("XN_CAPTURE_RECOVERY", "reader_release_failed", e)
+        }
+        val encoder = videoEncoder
+        videoEncoder = null
+        if (encoder != null) {
+            try { encoder.signalEndOfInputStream() } catch (e: Exception) {
+                Log.w("XN_CAPTURE_RECOVERY", "encoder_end_failed", e)
+            }
+            try { encoder.stop() } catch (e: Exception) {
+                Log.w("XN_CAPTURE_RECOVERY", "encoder_stop_failed", e)
+            }
+            try { encoder.release() } catch (e: Exception) {
+                Log.w("XN_CAPTURE_RECOVERY", "encoder_release_failed", e)
             }
         }
-        checkMediaPermission()
-        _isStart = true
-        FFI.setFrameRawEnable("video",true)
-        MainActivity.rdClipboardManager?.setCaptureStarted(_isStart)
-        return true
+        val releasedSurface = surface
+        surface = null
+        try {
+            releasedSurface?.release()
+        } catch (e: Exception) {
+            Log.w("XN_CAPTURE_RECOVERY", "surface_release_failed", e)
+        }
     }
 
     @Synchronized
     fun stopCapture() {
         Log.d(logTag, "Stop Capture")
+        captureRestartPending = false
+        captureRestartInVoiceCall = false
+        // Bump the capture generation so any in-flight first-frame timeout
+        // for the previous capture no-ops when it eventually fires.
+        captureGeneration += 1
+        firstFrameReceived = false
+        firstFrameTimeoutRunnable?.let {
+            serviceHandler?.removeCallbacks(it)
+            firstFrameTimeoutRunnable = null
+        }
         FFI.setFrameRawEnable("video",false)
         _isStart = false
         MainActivity.rdClipboardManager?.setCaptureStarted(_isStart)
@@ -458,30 +1018,25 @@ class MainService : Service() {
             // The virtual display video projection can be paused by calling `setSurface(null)`.
             // https://developer.android.com/reference/android/hardware/display/VirtualDisplay.Callback
             // https://learn.microsoft.com/en-us/dotnet/api/android.hardware.display.virtualdisplay.callback.onpaused?view=net-android-34.0
-            virtualDisplay?.setSurface(null)
+            try {
+                virtualDisplay?.setSurface(null)
+            } catch (e: Exception) {
+                Log.w("XN_CAPTURE_RECOVERY", "display_detach_failed", e)
+                releaseCaptureDisplay()
+            }
         } else {
-            virtualDisplay?.release()
+            releaseCaptureDisplay()
         }
         // suface needs to be release after `imageReader.close()` to imageReader access released surface
         // https://github.com/rustdesk/rustdesk/issues/4118#issuecomment-1515666629
-        imageReader?.close()
-        imageReader = null
-        videoEncoder?.let {
-            it.signalEndOfInputStream()
-            it.stop()
-            it.release()
-        }
-        if (!reuseVirtualDisplay) {
-            virtualDisplay = null
-        }
-        videoEncoder = null
-        // suface needs to be release after `imageReader.close()` to imageReader access released surface
-        // https://github.com/rustdesk/rustdesk/issues/4118#issuecomment-1515666629
-        surface?.release()
+        releaseVideoResources()
 
         // release audio
-        _isAudioStart = false
-        audioRecordHandle.tryReleaseAudio()
+        stopMicrophoneCapture {
+            _isAudioStart = false
+            audioRecordHandle.tryReleaseAudio()
+            true
+        }
     }
 
     fun destroy() {
@@ -489,14 +1044,16 @@ class MainService : Service() {
         _isReady = false
         _isAudioStart = false
 
-        stopCapture()
+        stopRequestedCapture()
 
         if (reuseVirtualDisplay) {
             virtualDisplay?.release()
             virtualDisplay = null
         }
 
-        mediaProjection = null
+        releaseMediaProjection()
+        mediaProjectionForegroundService = false
+        microphoneForegroundService = false
         checkMediaPermission()
         stopForeground(true)
         stopService(Intent(this, FloatingWindowService::class.java))
@@ -519,47 +1076,68 @@ class MainService : Service() {
         return isReady
     }
 
-    private fun startRawVideoRecorder(mp: MediaProjection) {
+    private fun startRawVideoRecorder(mp: MediaProjection): Boolean {
         Log.d(logTag, "startRawVideoRecorder,screen info:$SCREEN_INFO")
-        if (surface == null) {
+        val captureSurface = surface
+        if (captureSurface == null) {
             Log.d(logTag, "startRawVideoRecorder failed,surface is null")
-            return
+            return false
         }
-        createOrSetVirtualDisplay(mp, surface!!)
+        return createOrSetVirtualDisplay(mp, captureSurface)
     }
 
-    private fun startVP9VideoRecorder(mp: MediaProjection) {
+    private fun startVP9VideoRecorder(mp: MediaProjection): Boolean {
         createMediaCodec()
-        videoEncoder?.let {
-            surface = it.createInputSurface()
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                surface!!.setFrameRate(1F, FRAME_RATE_COMPATIBILITY_DEFAULT)
-            }
-            it.setCallback(cb)
-            it.start()
-            createOrSetVirtualDisplay(mp, surface!!)
+        val encoder = videoEncoder ?: return false
+        val inputSurface = encoder.createInputSurface()
+        surface = inputSurface
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            inputSurface.setFrameRate(1F, FRAME_RATE_COMPATIBILITY_DEFAULT)
         }
+        encoder.setCallback(cb)
+        encoder.start()
+        return createOrSetVirtualDisplay(mp, inputSurface)
     }
 
     // https://github.com/bk138/droidVNC-NG/blob/b79af62db5a1c08ed94e6a91464859ffed6f4e97/app/src/main/java/net/christianbeier/droidvnc_ng/MediaProjectionService.java#L250
     // Reuse virtualDisplay if it exists, to avoid media projection confirmation dialog every connection.
-    private fun createOrSetVirtualDisplay(mp: MediaProjection, s: Surface) {
-        try {
-            virtualDisplay?.let {
-                it.resize(SCREEN_INFO.width, SCREEN_INFO.height, SCREEN_INFO.dpi)
-                it.setSurface(s)
-            } ?: let {
-                virtualDisplay = mp.createVirtualDisplay(
+    private fun createOrSetVirtualDisplay(mp: MediaProjection, s: Surface): Boolean {
+        return try {
+            val existingDisplay = virtualDisplay
+            if (existingDisplay != null) {
+                existingDisplay.resize(SCREEN_INFO.width, SCREEN_INFO.height, SCREEN_INFO.dpi)
+                existingDisplay.setSurface(s)
+                true
+            } else {
+                val display = mp.createVirtualDisplay(
                     "RustDeskVD",
                     SCREEN_INFO.width, SCREEN_INFO.height, SCREEN_INFO.dpi, VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                     s, null, null
                 )
+                if (display == null) {
+                    Log.e(logTag, "createOrSetVirtualDisplay failed")
+                    handleVirtualDisplayFailure()
+                } else {
+                    virtualDisplay = display
+                    true
+                }
             }
         } catch (e: SecurityException) {
-            Log.w(logTag, "createOrSetVirtualDisplay: got SecurityException, re-requesting confirmation");
-            // This initiates a prompt dialog for the user to confirm screen projection.
-            requestMediaProjection()
+            Log.w(logTag, "createOrSetVirtualDisplay: got SecurityException", e)
+            handleVirtualDisplayFailure()
         }
+    }
+
+    private fun handleVirtualDisplayFailure(): Boolean {
+        captureRestartPending = true
+        virtualDisplay?.release()
+        virtualDisplay = null
+        releaseMediaProjection()
+        setMediaProjectionForegroundService(false)
+        _isReady = false
+        checkMediaPermission()
+        requestMediaProjection(true)
+        return false
     }
 
     private val cb: MediaCodec.Callback = object : MediaCodec.Callback() {
@@ -652,7 +1230,63 @@ class MainService : Service() {
             .setColor(ContextCompat.getColor(this, R.color.primary))
             .setWhen(System.currentTimeMillis())
             .build()
-        startForeground(DEFAULT_NOTIFY_ID, notification)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            startForeground(DEFAULT_NOTIFY_ID, notification, foregroundServiceType())
+        } else {
+            startForeground(DEFAULT_NOTIFY_ID, notification)
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun foregroundServiceType(): Int {
+        var serviceType = ServiceInfo.FOREGROUND_SERVICE_TYPE_NONE
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            // Keep a valid FGS type while the unattended host is idle and no capture type is active.
+            serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+        }
+        if (mediaProjectionForegroundService) {
+            serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && microphoneForegroundService) {
+            serviceType = serviceType or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+        }
+        return serviceType
+    }
+
+    private fun setMediaProjectionForegroundService(enabled: Boolean): Boolean {
+        return updateForegroundServiceTypes(enabled, microphoneForegroundService)
+    }
+
+    private fun setMicrophoneForegroundService(enabled: Boolean): Boolean {
+        return updateForegroundServiceTypes(mediaProjectionForegroundService, enabled)
+    }
+
+    private fun updateForegroundServiceTypes(
+        mediaProjectionEnabled: Boolean,
+        microphoneEnabled: Boolean,
+    ): Boolean {
+        if (mediaProjectionForegroundService == mediaProjectionEnabled &&
+            microphoneForegroundService == microphoneEnabled) {
+            return true
+        }
+        val previousMediaProjection = mediaProjectionForegroundService
+        val previousMicrophone = microphoneForegroundService
+        mediaProjectionForegroundService = mediaProjectionEnabled
+        microphoneForegroundService = microphoneEnabled
+        return try {
+            createForegroundNotification()
+            true
+        } catch (error: SecurityException) {
+            mediaProjectionForegroundService = previousMediaProjection
+            microphoneForegroundService = previousMicrophone
+            Log.e(logTag, "Failed to update foreground service types", error)
+            false
+        } catch (error: IllegalStateException) {
+            mediaProjectionForegroundService = previousMediaProjection
+            microphoneForegroundService = previousMicrophone
+            Log.e(logTag, "Failed to update foreground service types", error)
+            false
+        }
     }
 
     private fun loginRequestNotification(

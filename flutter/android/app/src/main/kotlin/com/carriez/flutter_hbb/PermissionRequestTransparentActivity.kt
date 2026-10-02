@@ -5,6 +5,7 @@ import android.content.Intent
 import android.media.projection.MediaProjectionManager
 import android.os.Build
 import android.os.Bundle
+import android.os.ResultReceiver
 import android.util.Log
 
 class PermissionRequestTransparentActivity: Activity() {
@@ -31,7 +32,13 @@ class PermissionRequestTransparentActivity: Activity() {
             if (resultCode == RESULT_OK && data != null) {
                 launchService(data)
             } else {
-                setResult(RES_FAILED)
+                val resultReceiver =
+                    intent.getParcelableExtra<ResultReceiver>(EXT_MEDIA_PROJECTION_RESULT_RECEIVER)
+                if (resultReceiver != null) {
+                    resultReceiver.send(RES_FAILED, null)
+                } else {
+                    setResult(RES_FAILED)
+                }
             }
         }
 
@@ -43,6 +50,10 @@ class PermissionRequestTransparentActivity: Activity() {
         val serviceIntent = Intent(this, MainService::class.java)
         serviceIntent.action = ACT_INIT_MEDIA_PROJECTION_AND_SERVICE
         serviceIntent.putExtra(EXT_MEDIA_PROJECTION_RES_INTENT, mediaProjectionResultIntent)
+        serviceIntent.putExtra(
+            EXT_MEDIA_PROJECTION_RESULT_RECEIVER,
+            intent.getParcelableExtra<ResultReceiver>(EXT_MEDIA_PROJECTION_RESULT_RECEIVER)
+        )
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             startForegroundService(serviceIntent)

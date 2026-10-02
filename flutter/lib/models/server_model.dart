@@ -32,6 +32,7 @@ class ServerModel with ChangeNotifier {
   bool _clipboardOk = false;
   bool _showElevation = false;
   bool hideCm = false;
+  bool _cmWindowPolicyReady = false;
   int _connectStatus = 0; // Rendezvous Server status
   String _verificationMethod = "";
   String _temporaryPasswordLength = "";
@@ -163,15 +164,14 @@ class ServerModel with ChangeNotifier {
           updateClientState(res);
         } else {
           if (_clients.isEmpty) {
-            hideCmWindow();
             if (_zeroClientLengthCounter++ == 12) {
               // 6 second
               windowManager.close();
             }
           } else {
             _zeroClientLengthCounter = 0;
-            if (!hideCm) showCmWindow();
           }
+          await _applyCmWindowPolicy();
         }
       }
 
@@ -195,6 +195,33 @@ class ServerModel with ChangeNotifier {
     }
   }
 
+  Future<void> onCmWindowInitialized() async {
+    if (desktopType != DesktopType.cm) return;
+    _cmWindowPolicyReady = true;
+    await _applyCmWindowPolicy();
+  }
+
+  Future<void> _applyCmWindowPolicy() async {
+    if (desktopType != DesktopType.cm || !_cmWindowPolicyReady) return;
+
+    if (_clients.isEmpty) {
+      if (hideCm) {
+        await hideCmWindow();
+      } else {
+        await minimizeCmWindow();
+      }
+      return;
+    }
+
+    if (hideCm) return;
+
+    if (_clients.any((client) => !client.authorized)) {
+      await restoreCmWindow();
+    } else {
+      await showCmWindow();
+    }
+  }
+
   /// 1. check android permission
   /// 2. check config
   /// audio true by default (if permission on) (false default < Android 10)
@@ -210,15 +237,10 @@ class ServerModel with ChangeNotifier {
       _audioOk = audioOption != 'N';
     }
 
-    // file
-    if (!await AndroidPermissionManager.check(kManageExternalStorage)) {
-      _fileOk = false;
-      bind.mainSetOption(key: kOptionEnableFileTransfer, value: "N");
-    } else {
-      final fileOption =
-          await bind.mainGetOption(key: kOptionEnableFileTransfer);
-      _fileOk = fileOption != 'N';
-    }
+    // Android file transfer is confined to app-specific storage. Files enter
+    // and leave the workspace through Android's system document picker.
+    final fileOption = await bind.mainGetOption(key: kOptionEnableFileTransfer);
+    _fileOk = fileOption != 'N';
 
     // clipboard
     final clipOption = await bind.mainGetOption(key: kOptionEnableClipboard);
@@ -319,16 +341,6 @@ class ServerModel with ChangeNotifier {
     if (clients.any((c) => !c.disconnected)) {
       await showClientsMayNotBeChangedAlert(parent.target);
     }
-    if (!_fileOk &&
-        !await AndroidPermissionManager.check(kManageExternalStorage)) {
-      final res =
-          await AndroidPermissionManager.request(kManageExternalStorage);
-      if (!res) {
-        showToast(translate('Failed'));
-        return;
-      }
-    }
-
     _fileOk = !_fileOk;
     bind.mainSetOption(
         key: kOptionEnableFileTransfer,
@@ -417,9 +429,6 @@ class ServerModel with ChangeNotifier {
       await checkRequestNotificationPermission();
       if (bind.mainGetLocalOption(key: kOptionDisableFloatingWindow) != 'Y') {
         await checkFloatingWindowPermission();
-      }
-      if (!await AndroidPermissionManager.check(kManageExternalStorage)) {
-        await AndroidPermissionManager.request(kManageExternalStorage);
       }
       final res = await parent.target?.dialogManager
           .show<bool>((setState, close, context) {
@@ -527,13 +536,7 @@ class ServerModel with ChangeNotifier {
         debugPrint("Failed to decode clientJson '$clientJson', error $e");
       }
     }
-    if (desktopType == DesktopType.cm) {
-      if (_clients.isEmpty) {
-        hideCmWindow();
-      } else if (!hideCm) {
-        showCmWindow();
-      }
-    }
+    await _applyCmWindowPolicy();
     if (_clients.length != oldClientLenght) {
       notifyListeners();
       if (isAndroid) androidUpdatekeepScreenOn();
@@ -574,9 +577,11 @@ class ServerModel with ChangeNotifier {
         _clients.removeAt(index_disconnected);
         tabController.remove(index_disconnected);
       }
-      if (desktopType == DesktopType.cm && !hideCm) {
-        showCmWindow();
+      if (desktopType == DesktopType.cm && !hideCm && !client.authorized) {
+        cmHiddenTimer?.cancel();
+        cmHiddenTimer = null;
       }
+      unawaited(_applyCmWindowPolicy());
       scrollToBottom();
       notifyListeners();
       if (isAndroid && !client.authorized) showLoginDialog(client);
@@ -594,12 +599,19 @@ class ServerModel with ChangeNotifier {
         onTap: () {},
         page: desktop.buildConnectionCard(client)));
     Future.delayed(Duration.zero, () async {
-      if (!hideCm) windowOnTop(null);
+      if (_cmWindowPolicyReady && !hideCm && !client.authorized) {
+        windowOnTop(null);
+      }
     });
     // Only do the hidden task when on Desktop.
-    if (client.authorized && isDesktop) {
+    if (client.authorized && isDesktop && _cmWindowPolicyReady) {
+      cmHiddenTimer?.cancel();
       cmHiddenTimer = Timer(const Duration(seconds: 3), () {
-        if (!hideCm) windowManager.minimize();
+        if (!hideCm &&
+            _cmWindowPolicyReady &&
+            !_clients.any((c) => !c.authorized)) {
+          windowManager.minimize();
+        }
         cmHiddenTimer = null;
       });
     }
@@ -729,7 +741,7 @@ class ServerModel with ChangeNotifier {
         parent.target?.invokeMethod("cancel_notification", id);
       }
       if (desktopType == DesktopType.cm && _clients.isEmpty) {
-        hideCmWindow();
+        unawaited(_applyCmWindowPolicy());
       }
       if (isAndroid) androidUpdatekeepScreenOn();
       notifyListeners();

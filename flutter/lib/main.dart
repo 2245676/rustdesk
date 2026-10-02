@@ -294,8 +294,9 @@ void runConnectionManagerScreen() async {
   if (hide) {
     await hideCmWindow(isStartup: true);
   } else {
-    await showCmWindow(isStartup: true);
+    await minimizeCmWindow(isStartup: true);
   }
+  await gFFI.serverModel.onCmWindowInitialized();
   setResizable(false);
   // Start the uni links handler and redirect links to Native, not for Flutter.
   listenUniLinks(handleByFlutter: false);
@@ -327,6 +328,29 @@ showCmWindow({bool isStartup = false}) async {
           kConnectionManagerWindowSizeClosedChat, Alignment.topRight);
       windowOnTop(null);
     }
+  }
+}
+
+minimizeCmWindow({bool isStartup = false}) async {
+  if (!isStartup) {
+    await windowManager.minimize();
+    return;
+  }
+  final windowOptions = getHiddenTitleBarWindowOptions(
+      size: kConnectionManagerWindowSizeClosedChat, alwaysOnTop: true);
+  await windowManager.waitUntilReadyToShow(windowOptions, null);
+  bind.mainHideDock();
+  await windowManager.setSizeAlignment(
+      kConnectionManagerWindowSizeClosedChat, Alignment.topRight);
+  await windowManager.minimize();
+  _isCmReadyToShow = true;
+}
+
+restoreCmWindow() async {
+  await showCmWindow();
+  if (_isCmReadyToShow && await windowManager.isMinimized()) {
+    await windowManager.restore();
+    await windowManager.focus();
   }
 }
 
