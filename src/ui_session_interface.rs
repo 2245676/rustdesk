@@ -99,6 +99,8 @@ enum ConnectionState {
 pub struct ConnectionRoundState {
     round: u32,
     state: ConnectionState,
+    #[cfg(target_os = "android")]
+    disconnected_at: i64,
 }
 
 impl ConnectionRoundState {
@@ -125,12 +127,25 @@ impl ConnectionRoundState {
             false
         } else {
             self.state = ConnectionState::Disconnected;
+            #[cfg(target_os = "android")]
+            {
+                self.disconnected_at = hbb_common::get_time().max(2);
+            }
             true
         }
     }
 
     pub fn is_connected(&self) -> bool {
         matches!(self.state, ConnectionState::Connected)
+    }
+
+    #[cfg(target_os = "android")]
+    pub fn android_connection_state(&self) -> i64 {
+        match self.state {
+            ConnectionState::Connecting => 0,
+            ConnectionState::Connected => 1,
+            ConnectionState::Disconnected => self.disconnected_at,
+        }
     }
 }
 
@@ -139,6 +154,8 @@ impl Default for ConnectionRoundState {
         Self {
             round: 0,
             state: ConnectionState::Connecting,
+            #[cfg(target_os = "android")]
+            disconnected_at: 0,
         }
     }
 }

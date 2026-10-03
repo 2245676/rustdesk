@@ -1688,6 +1688,30 @@ pub fn session_get_rgba_size(session_id: SessionID, display: usize) -> usize {
     0
 }
 
+#[cfg(target_os = "android")]
+#[no_mangle]
+pub extern "C" fn session_get_android_connection_state(session_uuid_str: *const char) -> i64 {
+    if let Ok(session_id) = char_to_session_id(session_uuid_str) {
+        if let Some(session) = sessions::get_session_by_session_id(&session_id) {
+            return session
+                .connection_round_state
+                .lock()
+                .unwrap()
+                .android_connection_state();
+        }
+    }
+    -1
+}
+
+#[cfg(target_os = "android")]
+pub fn notify_android_session_disconnected(peer_id: &str) {
+    if let Some(session) =
+        sessions::get_session_by_peer_id(peer_id.to_owned(), ConnType::DEFAULT_CONN)
+    {
+        session.push_event::<&str>("session_disconnected", &[], &[]);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn session_get_rgba(session_uuid_str: *const char, display: usize) -> *const u8 {
     if let Ok(session_id) = char_to_session_id(session_uuid_str) {

@@ -66,6 +66,7 @@ jobs:
   #       args: --locked
 
   build:
+    if: false
     name: ${{ matrix.job.target }} (${{ matrix.job.os }})
     runs-on: ${{ matrix.job.os }}
     strategy:

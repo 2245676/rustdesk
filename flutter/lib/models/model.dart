@@ -42,6 +42,7 @@ import '../utils/image.dart' as img;
 import '../common/widgets/dialog.dart';
 import 'input_model.dart';
 import 'platform_model.dart';
+import '../mobile/remote_session_lifecycle.dart';
 import 'package:flutter_hbb/utils/scale.dart';
 
 import 'package:flutter_hbb/generated_bridge.dart'
@@ -107,6 +108,7 @@ class CachedPeerData {
 }
 
 class FfiModel with ChangeNotifier {
+  RemoteSessionLifecycle? androidRemoteSessionLifecycle;
   CachedPeerData cachedPeerData = CachedPeerData();
   PeerInfo _pi = PeerInfo();
   int? lastUserDisplay;
@@ -335,6 +337,7 @@ class FfiModel with ChangeNotifier {
   // todo: why called by two position
   StreamEventHandler startEventListener(SessionID sessionId, String peerId) {
     return (evt) async {
+      if (androidRemoteSessionLifecycle?.handleEvent(evt) == true) return;
       var name = evt['name'];
       if (name == 'msgbox') {
         handleMsgBox(evt, sessionId, peerId);

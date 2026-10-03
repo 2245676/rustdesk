@@ -60,6 +60,16 @@ class PlatformFFI {
 
   RustdeskImpl get ffiBind => _ffiBind;
   F3? _session_get_rgba;
+  int Function(Pointer<Utf8>)? _androidConnectionState;
+
+  int getAndroidConnectionState(SessionID sessionId) {
+    final id = sessionId.toString().toNativeUtf8();
+    try {
+      return _androidConnectionState!(id);
+    } finally {
+      malloc.free(id);
+    }
+  }
 
   static get localeName => Platform.localeName;
 
@@ -150,6 +160,10 @@ class PlatformFFI {
     debugPrint('initializing FFI $_appType');
     try {
       _session_get_rgba = dylib.lookupFunction<F3Dart, F3>("session_get_rgba");
+      if (isAndroid) {
+        _androidConnectionState = dylib.lookupFunction<Int64 Function(Pointer<Utf8>),
+            int Function(Pointer<Utf8>)>('session_get_android_connection_state');
+      }
       try {
         // SYSTEM user failed
         _dir = (await getApplicationDocumentsDirectory()).path;
