@@ -25,11 +25,14 @@ class RemoteSessionLifecycle {
   bool _endedInBackground(int state) =>
       state > 1 &&
       ((_backgroundSince != null && state >= _backgroundSince!) ||
-          _backgroundIntervals.any((range) =>
-              state >= range[0] && state <= range[1]));
+          _backgroundIntervals
+              .any((range) => state >= range[0] && state <= range[1]));
 
   void _checkState() {
-    if (_connected && _endedInBackground(readConnectionState())) {
+    final state = readConnectionState();
+    if (state == 0 || state == 1) {
+      _stale = false;
+    } else if (_connected && _endedInBackground(state)) {
       _stale = true;
       _pendingEvents.clear();
     }
@@ -41,13 +44,14 @@ class RemoteSessionLifecycle {
 
   void lifecycleChanged(AppLifecycleState state) {
     if (_exiting) return;
-    if (state == AppLifecycleState.paused || state == AppLifecycleState.hidden) {
-      if (_connected) _backgroundSince ??= now();
+    if (state == AppLifecycleState.paused ||
+        state == AppLifecycleState.hidden) {
+      _backgroundSince ??= now();
     } else if (state == AppLifecycleState.resumed) {
       if (_backgroundSince != null) {
         _backgroundIntervals.add([_backgroundSince!, now()]);
         _backgroundSince = null;
-        if (readConnectionState() == -1) _stale = true;
+        if (_connected && readConnectionState() == -1) _stale = true;
       }
       _checkState();
       if (!_exiting) {
@@ -61,8 +65,12 @@ class RemoteSessionLifecycle {
   }
 
   bool handleEvent(Map<String, dynamic> event) {
-    if (_exiting || _stale) return true;
-    if (event['name'] == 'peer_info') _connected = true;
+    if (_exiting) return true;
+    if (event['name'] == 'peer_info') {
+      _connected = true;
+      _checkState();
+    }
+    if (_stale) return true;
     if (event['name'] == 'session_disconnected') {
       _checkState();
       return true;

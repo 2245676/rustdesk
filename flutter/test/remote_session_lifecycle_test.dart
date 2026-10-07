@@ -78,17 +78,20 @@ void main() {
   });
 
   test('errors before a successful session retain their handling', () {
-    final connecting = RemoteSessionLifecycle(
-      readConnectionState: () => 150,
-      onExit: () => exits++,
-      replayEvent: replayed.add,
-      now: () => clock,
-    );
-    connecting.lifecycleChanged(AppLifecycleState.paused);
-    clock = 200;
-    connecting.lifecycleChanged(AppLifecycleState.resumed);
-    expect(connecting.handleEvent(error), isFalse);
-    expect(exits, 0);
+    for (final nativeState in [150, -1]) {
+      clock = 100;
+      final connecting = RemoteSessionLifecycle(
+        readConnectionState: () => nativeState,
+        onExit: () => exits++,
+        replayEvent: replayed.add,
+        now: () => clock,
+      );
+      connecting.lifecycleChanged(AppLifecycleState.paused);
+      clock = 200;
+      connecting.lifecycleChanged(AppLifecycleState.resumed);
+      expect(connecting.handleEvent(error), isFalse);
+      expect(exits, 0);
+    }
   });
 
   test('nonterminal background messages are replayed for a live session', () {
@@ -124,5 +127,55 @@ void main() {
     lifecycle.lifecycleChanged(AppLifecycleState.resumed);
     expect(lifecycle.handleEvent(error), isFalse);
     expect(exits, 0);
+  });
+
+  test('a same-session active reconnect clears the old background stale round',
+      () {
+    for (final resumedState in [0, 1]) {
+      clock = 100;
+      state = 1;
+      final reconnected = RemoteSessionLifecycle(
+        readConnectionState: () => state,
+        onExit: () => exits++,
+        replayEvent: replayed.add,
+        now: () => clock,
+      );
+      reconnected.handleEvent({'name': 'peer_info'});
+      reconnected.lifecycleChanged(AppLifecycleState.paused);
+      expect(reconnected.handleEvent(error), isTrue);
+      state = 150;
+      reconnected.handleEvent({'name': 'session_disconnected'});
+      state = resumedState;
+      if (state == 1) {
+        expect(reconnected.handleEvent({'name': 'peer_info'}), isFalse);
+      }
+      clock = 200;
+      reconnected.lifecycleChanged(AppLifecycleState.resumed);
+      expect(exits, 0);
+      expect(replayed, isEmpty);
+      state = 1;
+      expect(reconnected.handleEvent(error), isFalse);
+    }
+  });
+
+  test('a first connection that succeeds then ends in background exits once',
+      () {
+    state = 0;
+    final connecting = RemoteSessionLifecycle(
+      readConnectionState: () => state,
+      onExit: () => exits++,
+      replayEvent: replayed.add,
+      now: () => clock,
+    );
+    connecting.lifecycleChanged(AppLifecycleState.paused);
+    state = 1;
+    expect(connecting.handleEvent({'name': 'peer_info'}), isFalse);
+    state = 150;
+    connecting.handleEvent({'name': 'session_disconnected'});
+    clock = 200;
+    connecting.lifecycleChanged(AppLifecycleState.resumed);
+    connecting.lifecycleChanged(AppLifecycleState.resumed);
+    expect(exits, 1);
+    expect(replayed, isEmpty);
   });
 }
