@@ -41,6 +41,7 @@ void _closeVideoFrame(JSObject frame) {
 typedef HandleEvent = Future<void> Function(Map<String, dynamic> evt);
 
 class PlatformFFI {
+  int getAndroidConnectionState(SessionID sessionId) => -1;
   final _eventHandlers = <String, Map<String, HandleEvent>>{};
   final RustdeskImpl _ffiBind = RustdeskImpl();
 

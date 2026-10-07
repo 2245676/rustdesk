@@ -26,6 +26,7 @@ import '../widgets/dialog.dart';
 import '../widgets/custom_scale_widget.dart';
 import '../widgets/custom_shortcuts.dart';
 import '../widgets/custom_shortcuts_settings.dart';
+import '../remote_session_lifecycle.dart';
 
 final initText = '1' * 1024;
 
@@ -69,6 +70,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   final _uniqueKey = UniqueKey();
   Timer? _iosKeyboardWorkaroundTimer;
   List<CustomShortcut> _customShortcuts = [];
+  RemoteSessionLifecycle? _sessionLifecycle;
 
   final _blockableOverlayState = BlockableOverlayState();
 
@@ -98,6 +100,16 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     super.initState();
     _customShortcuts = CustomShortcutStore.load();
     gFFI.ffiModel.updateEventListener(sessionId, widget.id);
+    if (isAndroid) {
+      final eventHandler = gFFI.ffiModel.startEventListener(sessionId, widget.id);
+      _sessionLifecycle = RemoteSessionLifecycle(
+        readConnectionState: () =>
+            platformFFI.getAndroidConnectionState(sessionId),
+        replayEvent: (event) => eventHandler(event),
+        onExit: _exitStaleSession,
+      );
+      gFFI.ffiModel.androidRemoteSessionLifecycle = _sessionLifecycle;
+    }
     gFFI.start(
       widget.id,
       password: widget.password,
@@ -147,6 +159,9 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
   @override
   Future<void> dispose() async {
     WidgetsBinding.instance.removeObserver(this);
+    if (identical(gFFI.ffiModel.androidRemoteSessionLifecycle, _sessionLifecycle)) {
+      gFFI.ffiModel.androidRemoteSessionLifecycle = null;
+    }
     // Close the session up-front. `gFFI.close()` below only calls `sessionClose`
     // after several awaits (canvas save, image update, the `enable_soft_keyboard`
     // platform call), so if the app is backgrounded while this page is disposing,
@@ -184,9 +199,20 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    _sessionLifecycle?.lifecycleChanged(state);
+    if (_sessionLifecycle?.exiting == true) return;
     if (state == AppLifecycleState.resumed) {
       trySyncClipboard();
     }
+  }
+
+  void _exitStaleSession() {
+    gFFI.closed = true;
+    gFFI.dialogManager.dismissAll();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) closeConnection();
+    });
+    WidgetsBinding.instance.ensureVisualUpdate();
   }
 
   // For client side
