@@ -2,11 +2,11 @@
   "schema_version": 1,
   "upstream_repository": "rustdesk/rustdesk",
   "upstream_ref": "refs/heads/master",
-  "upstream_sha": "9f9585ce155a6558f0625eaf8fabfe8827c9a552",
-  "previous_upstream_sha": "e5bc204fe4dacc4db9c3cdb1f1338813986c89e7",
+  "upstream_sha": "1d4abd0258bb6678cdd5e2abe3a2af59fd3d7dbe",
+  "previous_upstream_sha": "9f9585ce155a6558f0625eaf8fabfe8827c9a552",
   "scheduler_repository": "2245676/rustdesk",
   "workflow_sha": "ab68b929ba9a6f84df4c490038a0cc6542338dcc",
-  "run_id": "37449391546",
+  "run_id": "37764837196",
   "run_attempt": "1",
   "event": "schedule"
 }
