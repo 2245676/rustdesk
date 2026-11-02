@@ -166,10 +166,22 @@ jobs:
             core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
             core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
 
-      - name: Install dependencies
+      - name: Select preinstalled Java 17
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install -y \
+          test -x "${JAVA_HOME_17_X64:?}/bin/java"
+          JAVA_VERSION=$("$JAVA_HOME_17_X64/bin/java" -version 2>&1)
+          printf '%s\n' "$JAVA_VERSION"
+          grep -Eq 'version "17\.' <<< "$JAVA_VERSION"
+          echo "JAVA_HOME=$JAVA_HOME_17_X64" >> "$GITHUB_ENV"
+          echo "$JAVA_HOME_17_X64/bin" >> "$GITHUB_PATH"
+      - name: Install dependencies
+        timeout-minutes: 15
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          sudo -E apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+          sudo -E apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y \
                clang \
                cmake \
                curl \
@@ -195,7 +207,6 @@ jobs:
                llvm-dev \
                nasm \
                ninja-build \
-               openjdk-17-jdk-headless \
                pkg-config \
                tree \
                wget
@@ -321,10 +332,9 @@ jobs:
       - name: Build rustdesk
         shell: bash
         env:
-          JAVA_HOME: /usr/lib/jvm/java-17-openjdk-amd64
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
-          export PATH=/usr/lib/jvm/java-17-openjdk-amd64/bin:$PATH
+          export PATH="$JAVA_HOME/bin:$PATH"
           # Increase Gradle JVM memory for CI builds
           sed -i "s/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g" ./flutter/android/gradle.properties
           # temporary use debug sign config
@@ -382,6 +392,7 @@ jobs:
           git merge-base --is-ancestor 8db8678545c891327441118eac86334ef67d7785 HEAD
           test "$(git rev-parse HEAD:libs/hbb_common)" = "$(git -C libs/hbb_common rev-parse HEAD)"
           mkdir -p build-evidence
+          java -version > build-evidence/java17-version.txt 2>&1
           printf "%s\n" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > build-evidence/workflow-run.txt
           git rev-parse HEAD > build-evidence/source-commit.txt
           git rev-parse HEAD^{tree} > build-evidence/source-tree.txt
