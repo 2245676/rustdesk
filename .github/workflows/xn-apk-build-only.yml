@@ -3,8 +3,6 @@ on:
   push:
     branches:
       - codex/apk-upgrade-20261102
-    paths:
-      - .github/workflows/xn-apk-build-only.yml
 permissions:
   contents: read
 concurrency:
