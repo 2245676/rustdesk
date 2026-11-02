@@ -291,6 +291,7 @@ jobs:
         with:
           prefix-key: rustdesk-lib-cache-android # TODO: drop '-android' part after caches are invalidated
           key: ${{ matrix.job.target }}
+          cache-on-failure: true
 
       - name: Build rustdesk lib
         env:
@@ -335,6 +336,9 @@ jobs:
           ANDROID_NDK_HOME: ${{ steps.setup-ndk.outputs.ndk-path }}
         run: |
           export PATH="$JAVA_HOME/bin:$PATH"
+          NDK_REVISION=$(awk '$1 == "Pkg.Revision" { print $3 }' "$ANDROID_NDK_HOME/source.properties")
+          test "$NDK_REVISION" = "28.2.13676358"
+          printf '\nandroid { ndkVersion "%s"; ndkPath "%s" }\nprintln("XN_NDK_VERSION=" + android.ndkVersion + ";XN_NDK_PATH=" + android.ndkPath)\n' "$NDK_REVISION" "$ANDROID_NDK_HOME" >> ./flutter/android/app/build.gradle
           # Increase Gradle JVM memory for CI builds
           sed -i "s/org.gradle.jvmargs=-Xmx1024M/org.gradle.jvmargs=-Xmx2g/g" ./flutter/android/gradle.properties
           # temporary use debug sign config
@@ -393,6 +397,10 @@ jobs:
           test "$(git rev-parse HEAD:libs/hbb_common)" = "$(git -C libs/hbb_common rev-parse HEAD)"
           mkdir -p build-evidence
           java -version > build-evidence/java17-version.txt 2>&1
+          cp "$ANDROID_NDK_HOME/source.properties" build-evidence/ndk-source.properties
+          "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" --version > build-evidence/llvm-strip-version.txt
+          sha256sum "$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/llvm-strip" > build-evidence/llvm-strip-tool.sha256
+          git diff -- flutter/android/app/build.gradle flutter/android/gradle.properties > build-evidence/runner-build-overrides.patch
           printf "%s\n" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT" > build-evidence/workflow-run.txt
           git rev-parse HEAD > build-evidence/source-commit.txt
           git rev-parse HEAD^{tree} > build-evidence/source-tree.txt
@@ -409,14 +417,17 @@ jobs:
           with zipfile.ZipFile(apk) as z:
               data=z.read('lib/arm64-v8a/librustdesk.so')
           h=lambda b:hashlib.sha256(b).hexdigest()
-          assert h(data)==h(dest.read_bytes()),'Packaged native library differs from exact built native output'
-          pathlib.Path('build-evidence/native-provenance.json').write_text(json.dumps({'source_commit':os.environ['GITHUB_SHA'],'raw_native_sha256':h(source.read_bytes()),'stripped_native_sha256':h(data),'packaged_matches_exact_ndk_stripped_output':True},indent=2))
+          stripped=dest.read_bytes()
+          matches=h(data)==h(stripped)
+          pathlib.Path('build-evidence/native-provenance.json').write_text(json.dumps({'source_commit':os.environ['GITHUB_SHA'],'raw_native_sha256':h(source.read_bytes()),'raw_native_bytes':source.stat().st_size,'stripped_native_sha256':h(stripped),'stripped_native_bytes':len(stripped),'packaged_native_sha256':h(data),'packaged_native_bytes':len(data),'packaged_matches_exact_ndk_stripped_output':matches},indent=2))
           dest.unlink()
+          assert matches,'Packaged native library differs from exact built native output'
           PY_NATIVE
           AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -n1)
           "$AAPT" dump badging signed-apk/*.apk > build-evidence/apk-badging.txt
           grep "package: name='com.carriez.flutter_hbb.xncoexist' versionCode='2069' versionName='1.5.1'" build-evidence/apk-badging.txt
       - name: Upload build-only APK and provenance
+        if: ${{ always() && hashFiles('signed-apk/*.apk') != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: xn-apk-arm64-${{ github.sha }}
