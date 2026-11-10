@@ -6,10 +6,14 @@ on:
         description: Exact reviewed build source commit
         required: true
         type: string
+      windows_only:
+        description: Build only the Windows QA package
+        type: boolean
+        default: false
 permissions:
   contents: read
 concurrency:
-  group: xn-remote-sleep-qa-${{ github.ref }}
+  group: xn-remote-sleep-qa-${{ github.ref }}-${{ inputs.windows_only && 'windows' || 'all' }}
   cancel-in-progress: false
 env:
   EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
@@ -131,7 +135,7 @@ jobs:
             ./flutter/ios/Runner/bridge_generated.h
 
   build-rustdesk-android:
-    if: github.repository == '2245676/rustdesk' && github.ref == 'refs/heads/codex/remote-sleep-qa-20261110'
+    if: github.repository == '2245676/rustdesk' && github.ref == 'refs/heads/codex/remote-sleep-qa-20261110' && !inputs.windows_only
     needs: [generate_bridge]
     name: build rustdesk android apk ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
@@ -540,6 +544,31 @@ jobs:
           vcpkgDirectory: C:\vcpkg
           vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
           doNotCache: false
+
+      - name: Cache the exact mfx-dispatch patch via the GitHub API
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $commit = 'd6241243f85a0d947bdfe813006686a930edef24'
+          $apiPatch = Join-Path $env:RUNNER_TEMP 'mfx-api.patch'
+          curl.exe --fail --silent --show-error --retry 3 --max-time 30 `
+            --header 'Accept: application/vnd.github.patch' `
+            --header "Authorization: Bearer $env:GH_TOKEN" `
+            --output $apiPatch "https://api.github.com/repos/lu-zero/mfx_dispatch/commits/$commit"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download the upstream mfx-dispatch patch' }
+          $patch = [IO.File]::ReadAllText($apiPatch).Replace(
+            'index 9d3823e..beea532 ',
+            'index 9d3823ec3e4a06851c689810c9d1accb2dfb42f9..beea53220c4b016f8520acb5a3073cbdbbcbe144 ')
+          $bytes = [Text.Encoding]::UTF8.GetBytes($patch)
+          $hash = [Convert]::ToHexString([Security.Cryptography.SHA512]::HashData($bytes))
+          $expected = '5d2ffc4ec2ba0e5859d01d2e072f75436ebc3e62e0f6580b5bb8b9f82fe588e7558a46a1fdfa0297a782c0eeb8f50322258d0dd9e41d927cc9be496727b61e44'
+          if ($hash -ne $expected) { throw 'API patch bytes do not match the vcpkg recipe' }
+          $downloads = $env:VCPKG_DOWNLOADS
+          if (!$downloads) { $downloads = Join-Path $env:VCPKG_ROOT 'downloads' }
+          New-Item -ItemType Directory -Force -Path $downloads | Out-Null
+          [IO.File]::WriteAllBytes((Join-Path $downloads "fix-missing-cstdint-import-$commit.patch"), $bytes)
 
       - name: Install vcpkg dependencies
         env:
