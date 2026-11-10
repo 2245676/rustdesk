@@ -824,5 +824,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Trust duration (days)", "Duración da confianza (días)"),
         ("Renew trust", "Renovar a confianza"),
         ("install-directory-not-empty-tip", "O cartafol seleccionado non está baleiro. A instalación pode eliminar os datos existentes. Considera escoller outro cartafol."),
+        ("Sleep remote device", ""),
+        ("Could not put the remote device to sleep.", ""),
     ].iter().cloned().collect();
 }

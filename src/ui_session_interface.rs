@@ -595,6 +595,15 @@ impl<T: InvokeUiSession> Session<T> {
         self.send(Data::Message(msg));
     }
 
+    #[cfg(any(target_os = "android", target_os = "ios", feature = "flutter"))]
+    pub(crate) fn sleep_remote_device(&self) {
+        let mut misc = Misc::new();
+        misc.set_sleep_remote_device(true);
+        let mut msg = Message::new();
+        msg.set_misc(misc);
+        self.send(Data::Message(msg));
+    }
+
     pub fn get_audit_server(&self, typ: String) -> String {
         if LocalConfig::get_option("access_token").is_empty() {
             return "".to_owned();

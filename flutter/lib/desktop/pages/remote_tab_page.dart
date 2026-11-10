@@ -6,6 +6,7 @@ import 'package:desktop_multi_window/desktop_multi_window.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_hbb/common.dart';
 import 'package:flutter_hbb/common/shared_state.dart';
+import 'package:flutter_hbb/common/widgets/toolbar.dart';
 import 'package:flutter_hbb/consts.dart';
 import 'package:flutter_hbb/models/input_model.dart';
 import 'package:flutter_hbb/models/state_model.dart';
@@ -297,6 +298,19 @@ class _ConnectionTabPageState extends State<ConnectionTabPage> {
         ),
         proc: () => showRestartRemoteDevice(
             pi, peerId ?? '', sessionId, ffi.dialogManager),
+        padding: padding,
+        dismissOnClicked: true,
+        dismissCallback: cancelFunc,
+      ));
+    }
+
+    if (canSleepRemoteDevice(ffi)) {
+      menu.add(MenuEntryButton<String>(
+        childBuilder: (TextStyle? style) => Text(
+          translate('Sleep remote device'),
+          style: style,
+        ),
+        proc: () => sleepRemoteDevice(sessionId),
         padding: padding,
         dismissOnClicked: true,
         dismissCallback: cancelFunc,

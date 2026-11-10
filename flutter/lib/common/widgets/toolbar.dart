@@ -22,6 +22,22 @@ const String kWaylandKeyboardIssueUrl =
     'https://github.com/rustdesk/rustdesk/issues/14586';
 final Set<String> _waylandKeyboardPromptSuppressedConnectionIds = <String>{};
 
+bool canSleepRemoteDevice(FFI ffi) {
+  final model = ffi.ffiModel;
+  return (isDesktop || isMobile) &&
+      ffi.connType == ConnType.defaultConn &&
+      model.pi.platform == kPeerPlatformWindows &&
+      model.pi.platformAdditions['support_remote_sleep'] == true &&
+      model.permissions['restart'] != false &&
+      model.keyboard &&
+      !model.viewOnly;
+}
+
+void sleepRemoteDevice(SessionID sessionId) {
+  unawaited(bind.sessionSetCommon(
+      sessionId: sessionId, key: 'sleep-remote-device', value: 'Y'));
+}
+
 Future<bool> openWaylandKeyboardIssueUrl() {
   return launchUrl(
     Uri.parse(kWaylandKeyboardIssueUrl),
@@ -660,6 +676,12 @@ List<TTextMenu> toolbarControls(BuildContext context, String id, FFI ffi) {
               showRestartRemoteDevice(pi, id, sessionId, ffi.dialogManager),
           actionId: kShortcutActionRestartRemote),
     );
+  }
+  if (canSleepRemoteDevice(ffi)) {
+    v.add(TTextMenu(
+      child: Text(translate('Sleep remote device')),
+      onPressed: () => sleepRemoteDevice(sessionId),
+    ));
   }
   // insertLock
   if (isDefaultConn && !ffiModel.viewOnly && ffi.ffiModel.keyboard) {

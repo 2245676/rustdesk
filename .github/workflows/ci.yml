@@ -1,4 +1,4 @@
-name: XN ARM64 APK build only
+name: XN remote sleep Windows and Android QA
 on:
   workflow_dispatch:
     inputs:
@@ -9,7 +9,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: xn-apk-build-${{ github.ref }}
+  group: xn-remote-sleep-qa-${{ github.ref }}
   cancel-in-progress: false
 env:
   EXPECTED_SOURCE_SHA: ${{ inputs.expected_source_sha }}
@@ -22,10 +22,13 @@ env:
   VCPKG_CMAKE_VERSION: "4.3.0"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   VERSION: "1.5.1"
+  SCITER_RUST_VERSION: "1.75"
+  LLVM_VERSION: "15.0.6"
+  FLUTTER_VERSION: "3.24.5"
   NDK_VERSION: "r28c"
 jobs:
   generate_bridge:
-    if: github.repository == '2245676/rustdesk' && github.ref == 'refs/heads/codex/apk-upgrade-20261102'
+    if: github.repository == '2245676/rustdesk' && github.ref == 'refs/heads/codex/remote-sleep-qa-20261110'
     runs-on: ${{ matrix.job.os }}
     timeout-minutes: 60
     strategy:
@@ -128,7 +131,7 @@ jobs:
             ./flutter/ios/Runner/bridge_generated.h
 
   build-rustdesk-android:
-    if: github.repository == '2245676/rustdesk' && github.ref == 'refs/heads/codex/apk-upgrade-20261102'
+    if: github.repository == '2245676/rustdesk' && github.ref == 'refs/heads/codex/remote-sleep-qa-20261110'
     needs: [generate_bridge]
     name: build rustdesk android apk ${{ matrix.job.target }}
     runs-on: ${{ matrix.job.os }}
@@ -352,7 +355,7 @@ jobs:
               pushd flutter
               flutter pub get --enforce-lockfile
               flutter test --no-pub test/custom_shortcuts_core_test.dart test/remote_session_lifecycle_test.dart test/input_modifier_utils_test.dart test/local_flutter_shortcuts_test.dart --reporter expanded
-              flutter build apk "--${{ matrix.job.reltype }}" --no-pub --build-name 1.5.1 --build-number 69 --target-platform android-arm64 --split-per-abi
+              flutter build apk "--${{ matrix.job.reltype }}" --no-pub --build-name 1.5.1 --build-number 70 --target-platform android-arm64 --split-per-abi
               mv build/app/outputs/flutter-apk/app-arm64-v8a-${{ matrix.job.reltype }}.apk ../rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk
             ;;
             armv7-linux-androideabi)
@@ -425,7 +428,7 @@ jobs:
           PY_NATIVE
           AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -n1)
           "$AAPT" dump badging signed-apk/*.apk > build-evidence/apk-badging.txt
-          grep "package: name='com.carriez.flutter_hbb.xncoexist' versionCode='2069' versionName='1.5.1'" build-evidence/apk-badging.txt
+          grep "package: name='com.carriez.flutter_hbb.xncoexist' versionCode='2070' versionName='1.5.1'" build-evidence/apk-badging.txt
       - name: Upload build-only APK and provenance
         if: ${{ always() && hashFiles('signed-apk/*.apk') != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -436,3 +439,209 @@ jobs:
           path: |
             signed-apk/*.apk
             build-evidence/*
+
+  build-RustDeskTempTopMostWindow:
+    if: github.repository == '2245676/rustdesk' && github.ref == 'refs/heads/codex/remote-sleep-qa-20261110'
+    uses: ./.github/workflows/third-party-RustDeskTempTopMostWindow.yml
+    with:
+      upload-artifact: true
+      target: windows-2022
+      configuration: Release
+      platform: x64
+      target_version: Windows10
+
+  build-windows-x64:
+    if: github.repository == '2245676/rustdesk' && github.ref == 'refs/heads/codex/remote-sleep-qa-20261110'
+    needs: [build-RustDeskTempTopMostWindow, generate_bridge]
+    name: build rustdesk windows x64 QA
+    runs-on: ${{ matrix.job.os }}
+    timeout-minutes: 120
+    strategy:
+      matrix:
+        job:
+          - target: x86_64-pc-windows-msvc
+            os: windows-2022
+            arch: x86_64
+            flutter-arch: x64
+            vcpkg-triplet: x64-windows-static
+            build-args: "--vram"
+    steps:
+      - name: Validate exact requested build source
+        shell: bash
+        run: |
+          [[ "$EXPECTED_SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$GITHUB_SHA" = "$EXPECTED_SOURCE_SHA"
+      - name: Export GitHub Actions cache environment variables
+        uses: actions/github-script@d7906e4ad0b1822421a7e6a35d5ca353c962f410 # v6
+        with:
+          script: |
+            core.exportVariable('ACTIONS_CACHE_URL', process.env.ACTIONS_CACHE_URL || '');
+            core.exportVariable('ACTIONS_RUNTIME_TOKEN', process.env.ACTIONS_RUNTIME_TOKEN || '');
+
+      - name: Checkout source code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          submodules: recursive
+          persist-credentials: false
+
+      - name: Restore bridge files
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          # arm64 is on Flutter 3.44, so it needs the bridge generated with the same Flutter
+          # (its *.freezed.dart must match the freezed the arm64 build resolves). x64 and every
+          # other platform keep the default 3.22.3-generated bridge.
+          name: ${{ matrix.job.arch == 'aarch64' && 'bridge-artifact-flutter-3.44' || 'bridge-artifact' }}
+          path: ./
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@ebc0426251bc40c7cd31162802432c68818ab8f0 # v2.0.9
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install flutter
+        id: flutter
+        uses: subosito/flutter-action@2783a3f08e1baf891508463f8c6653c258246225  # v2.12.0; https://github.com/subosito/flutter-action/issues/277
+        with:
+          channel: "stable"
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          architecture: x64
+
+      - name: Replace engine with rustdesk custom flutter engine
+        run: |
+          flutter doctor -v
+          flutter precache --windows
+          Invoke-WebRequest -Uri https://github.com/rustdesk/engine/releases/download/main/windows-x64-release.zip -OutFile windows-x64-release.zip
+          Expand-Archive -Path windows-x64-release.zip -DestinationPath windows-x64-release
+          mv -Force windows-x64-release/*  C:/hostedtoolcache/windows/flutter/stable-${{ env.FLUTTER_VERSION }}-x64/bin/cache/artifacts/engine/windows-x64-release/
+
+      - name: Patch flutter
+        shell: bash
+        run: |
+          cp .github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff $(dirname $(dirname $(which flutter)))
+          cd $(dirname $(dirname $(which flutter)))
+          if [[ "3.24.5" == ${{env.FLUTTER_VERSION}} ]]; then
+            git apply flutter_3.24.4_dropdown_menu_enableFilter.diff
+          fi
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@e97e2d8cc328f1b50210efc529dca0028893a2d9 # v1
+        with:
+          toolchain: ${{ env.SCITER_RUST_VERSION }}
+          targets: ${{ matrix.job.target }}
+          components: "rustfmt"
+
+      - uses: Swatinem/rust-cache@e18b497796c12c097a38f9edb9d0641fb99eee32 # v2
+        with:
+          prefix-key: ${{ matrix.job.os }}
+
+      - name: Setup vcpkg with Github Actions binary cache
+        uses: lukka/run-vcpkg@b1a0dd252f06b9e25b3c022a9a03bd7a427fb6a2 # v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: ${{ matrix.job.vcpkg-triplet }}
+        run: |
+          if ! $VCPKG_ROOT/vcpkg \
+            install \
+            --triplet ${{ matrix.job.vcpkg-triplet }} \
+            --x-install-root="$VCPKG_ROOT/installed"; then
+            find "${VCPKG_ROOT}/" -name "*.log" | while read -r _1; do
+              echo "$_1:"
+              echo "======"
+              cat "$_1"
+              echo "======"
+              echo ""
+            done
+            exit 1
+          fi
+          head -n 100 "${VCPKG_ROOT}/buildtrees/ffmpeg/build-${{ matrix.job.vcpkg-triplet }}-rel-out.log" || true
+        shell: bash
+
+      - name: Build rustdesk
+        run: |
+          # Windows: build RustDesk
+          # --hwcodec is shared by all Windows targets; per-target extras (e.g. --vram) come from the matrix
+          python3 .\build.py --portable --flutter --skip-portable-pack --hwcodec ${{ matrix.job.build-args }}
+          mv ./flutter/build/windows/${{ matrix.job.flutter-arch }}/runner/Release ./rustdesk
+
+          # Download usbmmidd_v2.zip and extract it to ./rustdesk
+          Invoke-WebRequest -Uri https://github.com/rustdesk-org/rdev/releases/download/usbmmidd_v2/usbmmidd_v2.zip -OutFile usbmmidd_v2.zip
+          Expand-Archive usbmmidd_v2.zip -DestinationPath .
+          Remove-Item -Path usbmmidd_v2\Win32 -Recurse
+          Remove-Item -Path "usbmmidd_v2\deviceinstaller64.exe", "usbmmidd_v2\deviceinstaller.exe", "usbmmidd_v2\usbmmidd.bat"
+          mv -Force .\usbmmidd_v2 ./rustdesk
+
+          # Download printer driver files and extract them to ./rustdesk
+          try {
+            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/rustdesk_printer_driver_v4-1.4.zip -OutFile rustdesk_printer_driver_v4-1.4.zip
+            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/printer_driver_adapter.zip -OutFile printer_driver_adapter.zip
+            Invoke-WebRequest -Uri https://github.com/rustdesk/hbb_common/releases/download/driver/sha256sums -OutFile sha256sums
+
+            # Check and move the files
+            $checksum_driver = (Select-String -Path .\sha256sums -Pattern '^([a-fA-F0-9]{64}) \*rustdesk_printer_driver_v4-1.4\.zip$').Matches.Groups[1].Value
+            $downloadsum_driver = Get-FileHash -Path rustdesk_printer_driver_v4-1.4.zip -Algorithm SHA256
+            $checksum_adapter = (Select-String -Path .\sha256sums -Pattern '^([a-fA-F0-9]{64}) \*printer_driver_adapter\.zip$').Matches.Groups[1].Value
+            $downloadsum_adapter = Get-FileHash -Path printer_driver_adapter.zip -Algorithm SHA256
+            if ($checksum_driver -eq $downloadsum_driver.Hash -and $checksum_adapter -eq $downloadsum_adapter.Hash) {
+                Write-Output "rustdesk_printer_driver_v4-1.4, checksums match, extract the file."
+                Expand-Archive rustdesk_printer_driver_v4-1.4.zip -DestinationPath .
+                mkdir ./rustdesk/drivers
+                mv -Force .\rustdesk_printer_driver_v4-1.4 ./rustdesk/drivers/RustDeskPrinterDriver
+                Expand-Archive printer_driver_adapter.zip -DestinationPath .
+                mv -Force .\printer_driver_adapter.dll ./rustdesk
+            } elseif ($checksum_driver -ne $downloadsum_driver.Hash) {
+                Write-Output "rustdesk_printer_driver_v4-1.4, checksums do not match, ignore the file."
+            } else {
+                Write-Output "printer_driver_adapter.dll, checksums do not match, ignore the file."
+            }
+          } catch {
+              Write-Host "Ingore the printer driver error."
+          }
+
+      - name: Test the Windows sleep protocol scope
+        shell: bash
+        run: |
+          FEATURES=$(python3 ./build.py --portable --flutter --skip-portable-pack --hwcodec --vram --print-features)
+          cargo test --locked --release --lib --features "$FEATURES" remote_sleep_request_is_scoped_to_remote_desktop -- --list | grep -F "remote_sleep_request_is_scoped_to_remote_desktop: test"
+          cargo test --locked --release --lib --features "$FEATURES" remote_sleep_request_is_scoped_to_remote_desktop
+      - name: Download RustDeskTempTopMostWindow artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: topmostwindow-artifacts-x64
+          path: "./rustdesk"
+
+      - name: Build self-extracted executable
+        shell: bash
+        run: |
+          sed -i '/dpiAware/d' res/manifest.xml
+          pushd ./libs/portable
+          pip3 install -r requirements.txt
+          python3 ./generate.py -f ../../rustdesk/ -o . -e ../../rustdesk/rustdesk.exe
+          popd
+          mkdir -p ./SignOutput
+          mv ./target/release/rustdesk-portable-packer.exe ./SignOutput/rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}.exe
+
+      - name: Record Windows package provenance
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SOURCE_SHA"
+          test "$(git rev-parse HEAD:libs/hbb_common)" = "$(git -C libs/hbb_common rev-parse HEAD)"
+          mkdir -p windows-build-evidence
+          git rev-parse HEAD > windows-build-evidence/source-commit.txt
+          git rev-parse HEAD^{tree} > windows-build-evidence/source-tree.txt
+          sha256sum SignOutput/*.exe rustdesk/rustdesk.exe rustdesk/librustdesk.dll > windows-build-evidence/build-outputs.sha256
+
+      - name: Upload Windows QA executable and app files
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: xn-windows-x64-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 7
+          path: |
+            SignOutput/*.exe
+            rustdesk/**
+            windows-build-evidence/*
