@@ -20,6 +20,8 @@ jobs:
   sync:
     if: github.repository == '2245676/rustdesk' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     timeout-minutes: 15
     env:
       GIT_CONFIG_GLOBAL: /dev/null
@@ -73,13 +75,14 @@ jobs:
         if: steps.merge.outputs.commit != '' || github.event_name == 'workflow_dispatch'
         shell: bash
         env:
-          SYNC_TOKEN: ${{ secrets.CUSTOM_REPO_TOKEN }}
+          SYNC_TOKEN: ${{ secrets.RUSTDESK_STABLE_SYNC_TOKEN || github.token }}
+          HAS_SYNC_TOKEN: ${{ secrets.RUSTDESK_STABLE_SYNC_TOKEN != '' }}
           SYNC_BASE: ${{ steps.merge.outputs.base }}
           SYNC_COMMIT: ${{ steps.merge.outputs.commit }}
           CHECK_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.check_only }}
         run: |
           if [[ -z "$SYNC_TOKEN" ]]; then
-            echo "::error::Missing the existing repository sync credential CUSTOM_REPO_TOKEN."
+            echo "::error::Missing the GitHub Actions push credential."
             exit 1
           fi
           umask 077
@@ -105,12 +108,15 @@ jobs:
               curl --config - --fail --silent --show-error --max-time 20 \
                 -D "$auth_dir/headers" -o /dev/null https://api.github.com/repos/2245676/rustdesk
             scopes=$(awk 'tolower($0) ~ /^x-oauth-scopes:/{sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); print}' "$auth_dir/headers")
-            if [[ -n "$scopes" ]]; then
+            if [[ "$HAS_SYNC_TOKEN" == true && -n "$scopes" ]]; then
               if ! grep -Eq '(^|, *|\s)workflow(,|$)' <<<"$scopes"; then
                 echo "::error::The repository sync credential lacks workflow write scope."
                 exit 1
               fi
               echo 'Credential workflow scope verified.' >> "$GITHUB_STEP_SUMMARY"
+            fi
+            if [[ "$HAS_SYNC_TOKEN" == false ]]; then
+              echo 'Built-in token in use. Add RUSTDESK_STABLE_SYNC_TOKEN to authorize upstream workflow changes.' >> "$GITHUB_STEP_SUMMARY"
             fi
             echo 'Cloud push access verified (dry run).' >> "$GITHUB_STEP_SUMMARY"
             exit 0
