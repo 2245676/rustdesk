@@ -1,0 +1,133 @@
+name: XN RustDesk stable release sync
+
+on:
+  schedule:
+    - cron: '20 1 * * *' # 10:20 JST
+  workflow_dispatch:
+    inputs:
+      check_only:
+        description: Check the merge and push access without changing the branch
+        type: boolean
+        default: true
+
+permissions: {}
+
+concurrency:
+  group: xn-rustdesk-stable-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: github.repository == '2245676/rustdesk' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      GIT_CONFIG_GLOBAL: /dev/null
+      GIT_CONFIG_NOSYSTEM: '1'
+      GIT_TERMINAL_PROMPT: '0'
+      SYNC_TARGET: refs/heads/codex/apk-upgrade-20261102
+    steps:
+      - name: Merge the latest official stable tag
+        id: merge
+        shell: bash
+        run: |
+          release=$(curl --fail --silent --show-error --retry 2 --max-time 30 \
+            https://api.github.com/repos/rustdesk/rustdesk/releases/latest)
+          tag=$(jq -er '
+            select(.draft == false and .prerelease == false) | .tag_name |
+            select(test("^v?[0-9]{1,6}\\.[0-9]{1,6}\\.[0-9]{1,6}$"))
+          ' <<<"$release")
+          if [[ "$(printf '%s\n' 1.5.3 "${tag#v}" | sort -V | head -n 1)" != 1.5.3 ]]; then
+            echo "::error::Official release $tag is older than the adopted baseline 1.5.3."
+            exit 1
+          fi
+
+          repo="$RUNNER_TEMP/rustdesk-stable.git"
+          git init --bare --quiet "$repo"
+          cd "$repo"
+          git fetch --quiet --no-tags https://github.com/2245676/rustdesk.git "$SYNC_TARGET:refs/sync/target"
+          git fetch --quiet --no-tags https://github.com/rustdesk/rustdesk.git "refs/tags/$tag:refs/sync/release"
+          base=$(git rev-parse 'refs/sync/target^{commit}')
+          upstream=$(git rev-parse 'refs/sync/release^{commit}')
+          printf 'base=%s\n' "$base" >> "$GITHUB_OUTPUT"
+
+          if git merge-base --is-ancestor "$upstream" "$base"; then
+            printf 'RustDesk %s is already merged into %s.\n' "$tag" "$base" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if ! merge=$(git merge-tree --write-tree --name-only "$base" "$upstream"); then
+            printf '%s\n' "$merge"
+            echo "::error::Cannot automatically merge RustDesk $tag. The target branch was not changed."
+            exit 1
+          fi
+          tree=$(head -n 1 <<<"$merge")
+          git diff --check "$base" "$tree" --
+          commit=$(git -c user.name='XN Upstream Sync' \
+            -c user.email='xn-upstream-sync@users.noreply.github.com' \
+            commit-tree "$tree" -p "$base" -p "$upstream" -m "Merge official RustDesk $tag into the XN branch")
+          printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
+          printf 'RustDesk %s (%s) merged locally into %s.\n' "$tag" "$upstream" "$commit" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Verify access or push the merge
+        if: steps.merge.outputs.commit != '' || github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          SYNC_TOKEN: ${{ secrets.CUSTOM_REPO_TOKEN }}
+          SYNC_BASE: ${{ steps.merge.outputs.base }}
+          SYNC_COMMIT: ${{ steps.merge.outputs.commit }}
+          CHECK_ONLY: ${{ github.event_name == 'workflow_dispatch' && inputs.check_only }}
+        run: |
+          if [[ -z "$SYNC_TOKEN" ]]; then
+            echo "::error::Missing the existing repository sync credential CUSTOM_REPO_TOKEN."
+            exit 1
+          fi
+          umask 077
+          auth_dir=$(mktemp -d "$RUNNER_TEMP/rustdesk-sync-auth.XXXXXX")
+          trap 'rm -f "$auth_dir/askpass" "$auth_dir/pre-push" "$auth_dir/headers"; rmdir "$auth_dir"' EXIT
+          cat > "$auth_dir/askpass" <<'ASKPASS'
+          #!/usr/bin/env bash
+          case "$1" in
+            Username*) printf '%s\n' x-access-token ;;
+            Password*) printf '%s\n' "$SYNC_TOKEN" ;;
+            *) exit 1 ;;
+          esac
+          ASKPASS
+          chmod 700 "$auth_dir/askpass"
+          export GIT_ASKPASS="$auth_dir/askpass" LC_ALL=C
+
+          cd "$RUNNER_TEMP/rustdesk-stable.git"
+          fork=https://github.com/2245676/rustdesk.git
+          candidate="${SYNC_COMMIT:-$SYNC_BASE}"
+          if [[ -z "$SYNC_COMMIT" || "$CHECK_ONLY" == true ]]; then
+            git -c http.followRedirects=false push --dry-run --porcelain --no-follow-tags "$fork" "$candidate:$SYNC_TARGET"
+            printf 'header = "Authorization: Bearer %s"\n' "$SYNC_TOKEN" |
+              curl --config - --fail --silent --show-error --max-time 20 \
+                -D "$auth_dir/headers" -o /dev/null https://api.github.com/repos/2245676/rustdesk
+            scopes=$(awk 'tolower($0) ~ /^x-oauth-scopes:/{sub(/^[^:]*:[[:space:]]*/, ""); sub(/\r$/, ""); print}' "$auth_dir/headers")
+            if [[ -n "$scopes" ]]; then
+              if ! grep -Eq '(^|, *|\s)workflow(,|$)' <<<"$scopes"; then
+                echo "::error::The repository sync credential lacks workflow write scope."
+                exit 1
+              fi
+              echo 'Credential workflow scope verified.' >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo 'Cloud push access verified (dry run).' >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Git passes the server-advertised old SHA to this hook. Reject concurrent changes.
+          cat > "$auth_dir/pre-push" <<'HOOK'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          read -r local_ref local_sha remote_ref remote_sha
+          if [[ "$local_sha" != "$SYNC_COMMIT" || "$remote_ref" != "$SYNC_TARGET" || "$remote_sha" != "$SYNC_BASE" ]] || read -r extra; then
+            echo "The destination changed during sync. Retry from the new branch head." >&2
+            exit 1
+          fi
+          HOOK
+          chmod 700 "$auth_dir/pre-push"
+          git -c http.followRedirects=false -c core.hooksPath="$auth_dir" push --porcelain --no-follow-tags "$fork" "$SYNC_COMMIT:$SYNC_TARGET"
+          published=$(git ls-remote --exit-code "$fork" "$SYNC_TARGET")
+          [[ "${published%%[[:space:]]*}" == "$SYNC_COMMIT" ]]
+          printf 'Pushed %s to %s.\n' "$SYNC_COMMIT" "$SYNC_TARGET" >> "$GITHUB_STEP_SUMMARY"
