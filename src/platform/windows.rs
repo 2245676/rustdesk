@@ -3245,6 +3245,66 @@ pub fn is_process_consent_running() -> ResultType<bool> {
     Ok(output.status.success() && !output.stdout.is_empty())
 }
 
+pub(crate) fn sleep_remote_device() -> ResultType<()> {
+    use windows::{
+        core::Owned,
+        Win32::{
+            Foundation::{GetLastError, ERROR_SUCCESS, LUID},
+            Security::{
+                AdjustTokenPrivileges, LookupPrivilegeValueW, LUID_AND_ATTRIBUTES,
+                SE_PRIVILEGE_ENABLED, SE_SHUTDOWN_NAME, TOKEN_ADJUST_PRIVILEGES, TOKEN_PRIVILEGES,
+                TOKEN_QUERY,
+            },
+            System::{
+                Power::SetSuspendState,
+                Threading::{GetCurrentProcess, OpenProcessToken},
+            },
+        },
+    };
+
+    unsafe {
+        let mut token = Default::default();
+        OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+            &mut token,
+        )?;
+        let token = Owned::new(token);
+        let mut luid = LUID::default();
+        LookupPrivilegeValueW(None, SE_SHUTDOWN_NAME, &mut luid)?;
+        let enable = TOKEN_PRIVILEGES {
+            PrivilegeCount: 1,
+            Privileges: [LUID_AND_ATTRIBUTES {
+                Luid: luid,
+                Attributes: SE_PRIVILEGE_ENABLED,
+            }],
+        };
+        let mut previous = TOKEN_PRIVILEGES::default();
+        let mut previous_len = 0;
+        AdjustTokenPrivileges(
+            *token,
+            false,
+            Some(&enable),
+            mem::size_of::<TOKEN_PRIVILEGES>() as u32,
+            Some(&mut previous),
+            Some(&mut previous_len),
+        )?;
+        let status = GetLastError();
+        if status != ERROR_SUCCESS {
+            return Err(io::Error::from_raw_os_error(status.0 as i32).into());
+        }
+
+        let sleep_error = (!SetSuspendState(false, false, false)).then(io::Error::last_os_error);
+        if previous.PrivilegeCount != 0 {
+            AdjustTokenPrivileges(*token, false, Some(&previous), 0, None, None)?;
+        }
+        if let Some(err) = sleep_error {
+            return Err(err.into());
+        }
+    }
+    Ok(())
+}
+
 pub struct WakeLock(u32);
 // Failed to compile keepawake-rs on i686
 impl WakeLock {

@@ -1985,6 +1985,9 @@ impl Connection {
         }
         #[cfg(target_os = "windows")]
         {
+            if auth_conn_type == AuthConnType::Remote {
+                platform_additions.insert("support_remote_sleep".into(), json!(true));
+            }
             platform_additions.insert(
                 "is_installed".into(),
                 json!(crate::platform::is_installed()),
@@ -3973,6 +3976,8 @@ impl Connection {
                         }
                     }
                     #[cfg(windows)]
+                    Some(misc::Union::SleepRemoteDevice(true)) => self.request_remote_sleep(),
+                    #[cfg(windows)]
                     Some(misc::Union::ElevationRequest(r)) => match r.union {
                         Some(elevation_request::Union::Direct(_)) => {
                             self.handle_elevation_request(portable_client::StartPara::Direct)
@@ -5851,6 +5856,48 @@ impl Connection {
         self.authed_conn_id.as_ref().map(|id| id.conn_type())
     }
 
+    #[cfg(windows)]
+    fn request_remote_sleep(&self) {
+        if self.authed_conn_type() != Some(AuthConnType::Remote)
+            || !self.restart
+            || !self.peer_keyboard_enabled()
+        {
+            return;
+        }
+
+        // Serialize power requests while the process token's shutdown privilege is enabled.
+        static SLEEP_REQUEST: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+        let Ok(permit) = SLEEP_REQUEST.try_acquire() else {
+            return;
+        };
+        let mut peer = self.inner.clone();
+        let sleep = tokio::task::spawn_blocking(move || {
+            let _permit = permit;
+            crate::platform::sleep_remote_device()
+        });
+        tokio::spawn(async move {
+            let result = sleep
+                .await
+                .map_err(hbb_common::anyhow::Error::from)
+                .and_then(|res| res);
+            if let Err(err) = result {
+                hbb_common::throttled_log!(
+                    Duration::from_secs(30),
+                    warn,
+                    "Failed to put the remote device to sleep: {err}"
+                );
+                let mut msg = Message::new();
+                msg.set_message_box(MessageBox {
+                    msgtype: "custom-nocancel".into(),
+                    title: "Sleep remote device".into(),
+                    text: "Could not put the remote device to sleep.".into(),
+                    ..Default::default()
+                });
+                peer.send(Arc::new(msg));
+            }
+        });
+    }
+
     async fn handle_authorized_scope_violation(&mut self, message: &'static str) -> bool {
         let conn_type = self
             .authed_conn_type()
@@ -6224,6 +6271,7 @@ impl Connection {
             Some(misc::Union::MessageQuery(_)) => "misc.message_query",
             Some(misc::Union::FollowCurrentDisplay(_)) => "misc.follow_current_display",
             Some(misc::Union::SwitchSidesRequest(_)) => "misc.switch_sides_request",
+            Some(misc::Union::SleepRemoteDevice(_)) => "misc.sleep_remote_device",
             Some(_) => "misc.other",
             None => "misc.empty",
         }
@@ -7586,6 +7634,30 @@ mod test {
                 expected
             );
         }
+    }
+
+    #[test]
+    fn remote_sleep_request_is_scoped_to_remote_desktop() {
+        use hbb_common::protobuf::Message as _;
+
+        let request = misc_msg(|m| m.set_sleep_remote_device(true));
+        let decoded = Message::parse_from_bytes(&request.write_to_bytes().unwrap()).unwrap();
+        assert!(decoded.misc().sleep_remote_device());
+        for conn_type in [
+            AuthConnType::FileTransfer,
+            AuthConnType::PortForward,
+            AuthConnType::ViewCamera,
+            AuthConnType::Terminal,
+        ] {
+            assert_eq!(
+                Connection::authorized_message_scope_violation(conn_type, &decoded),
+                Some("misc.sleep_remote_device")
+            );
+        }
+        assert_eq!(
+            Connection::authorized_message_scope_violation(AuthConnType::Remote, &decoded),
+            None
+        );
     }
 
     #[test]

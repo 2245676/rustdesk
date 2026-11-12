@@ -824,5 +824,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Trust duration (days)", "משך האמון (ימים)"),
         ("Renew trust", "חידוש אמון"),
         ("install-directory-not-empty-tip", "התיקייה שנבחרה אינה ריקה. ההתקנה עלולה למחוק נתונים קיימים. מומלץ לבחור תיקייה אחרת."),
+        ("Sleep remote device", ""),
+        ("Could not put the remote device to sleep.", ""),
     ].iter().cloned().collect();
 }

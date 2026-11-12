@@ -824,5 +824,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Trust duration (days)", "مدة الثقة (بالأيام)"),
         ("Renew trust", "تجديد الثقة"),
         ("install-directory-not-empty-tip", "المجلد المحدد ليس فارغًا. قد يؤدي التثبيت إلى حذف البيانات الموجودة. يُنصح باختيار مجلد آخر."),
+        ("Sleep remote device", ""),
+        ("Could not put the remote device to sleep.", ""),
     ].iter().cloned().collect();
 }
