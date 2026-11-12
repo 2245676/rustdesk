@@ -74,12 +74,14 @@ class RemotePage extends StatefulWidget {
   RemotePage(
       {Key? key,
       required this.id,
+      this.loginMethod = '',
       this.password,
       this.isSharedPassword,
       this.forceRelay})
       : super(key: key);
 
   final String id;
+  final String loginMethod;
   final String? password;
   final bool? isSharedPassword;
   final bool? forceRelay;
@@ -139,6 +141,7 @@ class _RemotePageState extends State<RemotePage> with WidgetsBindingObserver {
     }
     gFFI.start(
       widget.id,
+      loginMethod: widget.loginMethod,
       password: widget.password,
       isSharedPassword: widget.isSharedPassword,
       forceRelay: widget.forceRelay,
