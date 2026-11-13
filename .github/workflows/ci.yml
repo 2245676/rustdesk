@@ -21,7 +21,7 @@ env:
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   VCPKG_CMAKE_VERSION: "4.3.0"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
-  VERSION: "1.5.1"
+  VERSION: "1.5.3"
   NDK_VERSION: "r28c"
 jobs:
   generate_bridge:
@@ -352,7 +352,7 @@ jobs:
               pushd flutter
               flutter pub get --enforce-lockfile
               flutter test --no-pub test/custom_shortcuts_core_test.dart test/remote_session_lifecycle_test.dart test/input_modifier_utils_test.dart test/local_flutter_shortcuts_test.dart --reporter expanded
-              flutter build apk "--${{ matrix.job.reltype }}" --no-pub --build-name 1.5.1 --build-number 69 --target-platform android-arm64 --split-per-abi
+              flutter build apk "--${{ matrix.job.reltype }}" --no-pub --build-name "${{ env.VERSION }}" --build-number 71 --target-platform android-arm64 --split-per-abi
               mv build/app/outputs/flutter-apk/app-arm64-v8a-${{ matrix.job.reltype }}.apk ../rustdesk-${{ env.VERSION }}-${{ matrix.job.arch }}${{ matrix.job.suffix }}.apk
             ;;
             armv7-linux-androideabi)
@@ -425,7 +425,7 @@ jobs:
           PY_NATIVE
           AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt -type f | sort -V | tail -n1)
           "$AAPT" dump badging signed-apk/*.apk > build-evidence/apk-badging.txt
-          grep "package: name='com.carriez.flutter_hbb.xncoexist' versionCode='2069' versionName='1.5.1'" build-evidence/apk-badging.txt
+          grep "package: name='com.carriez.flutter_hbb.xncoexist' versionCode='2071' versionName='${VERSION}'" build-evidence/apk-badging.txt
       - name: Upload build-only APK and provenance
         if: ${{ always() && hashFiles('signed-apk/*.apk') != '' }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

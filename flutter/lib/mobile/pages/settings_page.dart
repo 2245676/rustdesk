@@ -1072,6 +1072,14 @@ class _SettingsState extends State<SettingsPage> with WidgetsBindingObserver {
                       )),
                 ),
                 leading: Icon(Icons.info)),
+            if (isAndroid)
+              SettingsTile(
+                title: Text(translate('Download new version')),
+                leading: Icon(Icons.system_update),
+                onPressed: (_) async {
+                  await launchUrl(Uri.parse(kXnAndroidReleasesUrl));
+                },
+              ),
             SettingsTile(
                 title: Text(translate("Build Date")),
                 value: Padding(
